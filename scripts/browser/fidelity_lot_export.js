@@ -21,7 +21,7 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const num = s => { const n = parseFloat(String(s).replace(/[()]/g, '-').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : n; };
-  const AS_OF = new Date();
+  const AS_OF = new Date(); AS_OF.setHours(0, 0, 0, 0); // compare calendar dates, not instants
   const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
   const parseAcq = s => { s = clean(s); const m = s.match(/([A-Za-z]{3})[-\s](\d{1,2})[-,\s]+(\d{4})/); if (m && MON[m[1].toLowerCase()] != null) return new Date(+m[3], MON[m[1].toLowerCase()], +m[2]); const d = new Date(s); return isNaN(+d) ? null : d; };
   const termOf = acq => {

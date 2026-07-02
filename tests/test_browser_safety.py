@@ -91,10 +91,18 @@ class BrowserSafety(unittest.TestCase):
             idents.issubset(allowed_click_idents),
             f"{name}: click callers {sorted(idents)} not subset of {sorted(allowed_click_idents)}",
         )
-        # `a` must be a local download anchor.
-        self.assertRegex(src, r"createElement\s*\(\s*['\"]a['\"]\s*\)", f"{name}: missing createElement('a')")
-        self.assertIn("URL.createObjectURL", src, f"{name}: missing URL.createObjectURL")
-        self.assertRegex(src, r"\.download\s*=", f"{name}: missing download attribute")
+        # Every href assignment must be a local blob/object URL (no external navigation/exfil),
+        # and there must be no element `.src` load. Then bind the clicked anchor `a` to a
+        # createElement('a') + blob-URL + download (so `a.click()` can only save a local file).
+        for m in re.finditer(r"(\w+)\.href\s*=\s*([^\n;]+)", src):
+            self.assertIn("URL.createObjectURL", m.group(2),
+                          f"{name}: non-blob href assignment: {m.group(0).strip()!r}")
+        self.assertIsNone(re.search(r"\.src\s*=", src), f"{name}: element .src assignment present")
+        self.assertRegex(src, r"\ba\s*=\s*document\.createElement\(\s*['\"]a['\"]\s*\)",
+                         f"{name}: download anchor 'a' not created via document.createElement('a')")
+        self.assertRegex(src, r"\ba\.href\s*=\s*URL\.createObjectURL\(",
+                         f"{name}: a.href not assigned from URL.createObjectURL")
+        self.assertRegex(src, r"\ba\.download\s*=", f"{name}: a.download not set")
 
     def test_files_exist(self):
         self.assertTrue(os.path.isfile(EXPORT), EXPORT)
