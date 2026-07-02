@@ -1,6 +1,13 @@
 # Fidelity-portfolio-lab
 
+[![Validate](https://github.com/BlancosWay/Fidelity-portfolio-lab/actions/workflows/validate.yml/badge.svg)](https://github.com/BlancosWay/Fidelity-portfolio-lab/actions/workflows/validate.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.x-blue)
+![Dependencies: none](https://img.shields.io/badge/dependencies-none%20(stdlib)-brightgreen)
+
 Compliant, **read-only**, **local** analysis of your Fidelity holdings by tax lot.
+
+> **Not affiliated with Fidelity.** No API, no credentials, no login automation. See [NOTICE](NOTICE).
 
 Fidelity has no retail API, so this tool never touches your credentials or automates login. Instead:
 
@@ -66,6 +73,24 @@ anniversary (Mar-1 is its first long-term day).
 ```
 python -m unittest discover -s tests
 ```
+Or run the full local gate (tests + byte-compile + data-safety + `node --check` + release dry run):
+```
+python scripts/check.py
+```
+
+## Contributing & project docs
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev workflow and the safety ground rules.
+- [SECURITY.md](SECURITY.md) — the safety model and how to report a vulnerability privately.
+- [docs/REPO_SETUP.md](docs/REPO_SETUP.md) — the CI pipeline + branch-protection/approval setup.
+- [RELEASING.md](RELEASING.md) · [CHANGELOG.md](CHANGELOG.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
+Continuous integration runs on every push/PR: unit tests, byte-compile, a **data-safety** scan
+(fails if any real export or account identifier is committed), `node --check` of the browser
+scripts, a release dry run, and (on PRs) a changelog check. Releases are published from `main` by
+pushing a `vX.Y.Z` tag.
+
+## License
+[MIT](LICENSE) © BlancosWay
 
 ## Disclaimer
 Personal tooling, provided as-is. Term classifications are a convenience for organizing holdings and

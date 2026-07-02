@@ -1,0 +1,61 @@
+name: Release
+
+# Publish a GitHub Release when a human pushes a 'vX.Y.Z' tag that matches the VERSION file.
+# Nothing here creates tags or bumps versions — it only turns a deliberate, already-pushed tag
+# into a Release whose notes come from CHANGELOG.md. The deterministic steps below are exercised
+# on every PR/push by the "Release dry run" job in validate.yml.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify the tag is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag ${GITHUB_REF_NAME} ($GITHUB_SHA) is not an ancestor of origin/main — refusing to release"
+            exit 1
+          fi
+          echo "tag commit is on main"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+
+      - name: Verify the tag matches the VERSION file
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python scripts/release_notes.py current)"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} (=$tag) != VERSION $version"
+            exit 1
+          fi
+          echo "tag matches VERSION $version"
+
+      - name: Build release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          python scripts/release_notes.py section "$version" > release-notes.md
+          test -s release-notes.md
+          echo "----- release notes -----"; cat release-notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md

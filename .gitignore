@@ -11,8 +11,22 @@
 *.db
 *.sqlite
 *.sqlite3
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.ods
+*.numbers
 
 # === Python ===
 __pycache__/
 *.pyc
 .venv/
+
+# === OS / editor / CI cruft ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+release-notes.md

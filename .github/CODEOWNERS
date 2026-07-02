@@ -1,0 +1,7 @@
+# Code owners for BlancosWay/Fidelity-portfolio-lab
+#
+# @BlancosWay is auto-requested as reviewer on every pull request. Combined with a branch ruleset
+# that requires a pull request + passing checks + code-owner review, this makes @BlancosWay the
+# de-facto required reviewer for outside contributions. The owner's own PRs and Dependabot's are
+# auto-merged once checks pass (see .github/workflows/auto-merge.yml).
+* @BlancosWay
