@@ -1,0 +1,12 @@
+Account,Symbol,Description,Margin/Cash,Quantity,Date Acquired,Term (>1yr rule),Term (Fidelity),Average Cost Basis,Cost Basis Total,Current Value,Gain/Loss $,Gain/Loss %
+"Individual - TOD Z111","AAPL","APPLE INC","Margin","50","Aug-20-2021","Long-Term","Long","$28.50","$1,425.00","$10,500.00","+$9,075.00","+636.84%"
+"Individual - TOD Z111","AAPL","APPLE INC","Margin","15","Feb-11-2026","Short-Term","Short","$185.00","$2,775.00","$3,150.00","+$375.00","+13.51%"
+"Roth IRA 222","AAPL","APPLE INC","Cash","30","Mar-15-2023","Long-Term","Long","$155.00","$4,650.00","$6,300.00","+$1,650.00","+35.48%"
+"Individual - TOD Z111","NVDA","NVIDIA CORP","Margin","25","Jun-10-2022","Long-Term","Long","$16.20","$405.00","$4,250.00","+$3,845.00","+949.38%"
+"Roth IRA 222","NVDA","NVIDIA CORP","Cash","20","Sep-05-2025","Short-Term","Short","$120.00","$2,400.00","$3,400.00","+$1,000.00","+41.67%"
+"Individual - TOD Z111","VTI","VANGUARD TOTAL STOCK MARKET ETF","Margin","40","May-01-2020","Long-Term","Long","$145.00","$5,800.00","$12,200.00","+$6,400.00","+110.34%"
+"Individual - TOD Z111","BTC","BITCOIN","Cash","0.5","Dec-01-2021","Long-Term","Long","$57,000.00","$28,500.00","$54,000.00","+$25,500.00","+89.47%"
+"Individual - TOD Z111","BTC","BITCOIN","Cash","0.1","May-20-2026","Short-Term","Short","$95,000.00","$9,500.00","$10,800.00","+$1,300.00","+13.68%"
+"Roth IRA 222","AAPL 250 Call","AAPL JAN 16 2026 $250 CALL","Cash","2","Dec-10-2025","Short-Term","Short","$12.50","$2,500.00","$1,600.00","-$900.00","-36.00%"
+"Individual - TOD Z111","GRAB","GRAB HOLDINGS","Margin","100","Jul-01-2025","Short-Term","Short","$4.00","$400.00","$500.00","+$100.00","+25.00%"
+"Individual - TOD Z111","GRAB","GRAB HOLDINGS","Margin","50","Jun-30-2025","Long-Term","Long","$4.00","$200.00","$250.00","+$50.00","+25.00%"
