@@ -14,9 +14,10 @@
  *     Fidelity's own Term column on 277 real lots.
  *
  * USE: On Fidelity "Positions" (All accounts is fine). Console (Ctrl+Shift+J); if prompted type:
- * allow pasting. Paste this whole file. It auto-expands any collapsed account groups, then expands
- * each position one at a time (~1-2 min for large accounts), prints summaries, downloads
- * fidelity_lots.csv, then collapses the positions back.
+ * allow pasting. Paste this whole file. It auto-expands any collapsed account groups, then reads
+ * each position's lots ONE AT A TIME (expand -> read -> collapse, so the grid never grows large
+ * enough for Fidelity to drop off-screen rows), prints summaries, and downloads fidelity_lots.csv.
+ * A large account (100+ positions) can take several minutes -- watch the console progress.
  */
 (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -91,79 +92,95 @@
       console.warn(`${collapsedGroups().length} account group(s) still collapsed; their positions may be omitted. Click "Expand groups" (or each "Account:" row) and re-run for a complete export.`);
     }
   }
-  const total = document.querySelectorAll(EXP).length;
-  if (!total && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
-  console.log(`Expanding ${total} positions... (~1-2 min for large accounts; one lot drawer at a time)`);
-  let done = 0, guard = 0;
-  while (guard++ < total + 20) {
-    const btns = [...document.querySelectorAll(EXP)];
-    if (!btns.length) break;
-    const before = btns.length, b = btns[0];
-    try { b.scrollIntoView({ block: 'center' }); safeClick(b); } catch (e) {}
-    await waitUntil(() => document.querySelectorAll(EXP).length < before, 1800);
-    if (++done % 10 === 0) console.log(`  expanded ${done}/${total}...`);
-  }
-  // Some accounts open the position drawer on the "Research" tab, so the Purchase-history lot table
-  // (table.posweb-purchase-history, rendered inside the "...tabpanel-lots..." panel) is absent.
-  // Activate each drawer's "Purchase history" tab -- Fidelity's own in-drawer <button role="tab"> --
-  // so the lots render before we scrape. Clicking it only switches the drawer's tab; it has no href
-  // and never navigates (safeClick verifies this at runtime). Drawers already on Purchase history
-  // (aria-selected="true") are left untouched, so this is a no-op on accounts that default to it.
-  const LOTS_TAB = 'button.posweb-header-tab-button[aria-controls^="posweb-drawer-tabpanel-lots"]';
-  const lotTabs = [...document.querySelectorAll(LOTS_TAB)].filter(b => b.getAttribute('aria-selected') !== 'true');
-  if (lotTabs.length) {
-    console.log(`Switching ${lotTabs.length} drawer(s) to the Purchase history tab...`);
-    lotTabs.forEach(b => { try { safeClick(b); } catch (e) {} });
-  }
-  console.log('Waiting for lot data to finish loading...');
-  await sleep(2800); // floor: let the first drawers' lot tables start rendering
-  // Then wait until the lot-table count STOPS growing (stabilises) so large accounts finish their
-  // lazy loads before we scrape; breaks after ~1.6s with no change, hard cap ~25s.
-  let lastCount = -1, stableTicks = 0, waited = 0;
-  while (waited < 25000) {
-    const c = document.querySelectorAll('table.posweb-purchase-history').length;
-    if (c === lastCount) { if (++stableTicks >= 4) break; } else { stableTicks = 0; lastCount = c; }
-    await sleep(400); waited += 400;
-  }
+  // The Positions grid is NOT scroll-virtualised (all rows stay in the DOM), so enumerate every
+  // expandable position up front: its account (nearest preceding "Account:" row), symbol, and
+  // margin/cash sub-label. We then process ONE position at a time -- expand it, read its lot table,
+  // collapse it -- re-locating each position's expander button by (account, symbol) at click time
+  // (never trusting a stored, possibly-stale element ref). Opening ALL drawers at once makes the grid
+  // tall enough that Fidelity starts virtualising (dropping) off-screen drawers, which truncated large
+  // accounts mid-way (missing lots); keeping at most one drawer open avoids that and captures all.
+  const pinnedRowsNow = () => [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')]
+    .map(r => ({ r, ri: parseInt(r.getAttribute('row-index'), 10) }))
+    .filter(x => !isNaN(x.ri)).sort((a, b) => a.ri - b.ri);
+  const acctOf = cell => cell ? (clean(txt(cell, '.posweb-cell-account_primary') + ' ' + txt(cell, '.posweb-cell-account_secondary')) || clean(cell.textContent).replace(/^Account:\s*/i, '')) : '';
+  const symOf = nameBtn => txt(nameBtn, '.posweb-cell-symbol-name_container > span') || clean(nameBtn.textContent).split(' ')[0];
+  const isExpander = nameBtn => !!nameBtn && nameBtn.tagName === 'BUTTON' && nameBtn.hasAttribute('aria-expanded');
 
-  const plRows = [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')];
-  const positions = [], accounts = [];
-  plRows.forEach(r => {
-    const ri = parseInt(r.getAttribute('row-index'), 10); if (isNaN(ri)) return;
-    const cell = r.querySelector('[col-id="sym"]'); if (!cell) return;
-    if (r.classList.contains('posweb-row-account')) {
-      const p = txt(cell, '.posweb-cell-account_primary'), s = txt(cell, '.posweb-cell-account_secondary');
-      accounts.push({ ri, account: clean(p + ' ' + s) || clean(cell.textContent).replace(/^Account:\s*/i, '') });
-    } else {
+  // expanders(): the live expander buttons in DOM order. We address each position by its ORDINAL in
+  // this list -- collision-proof even if the same symbol appears twice in one account (e.g. a margin
+  // and a cash row), and re-located fresh at click time so a row re-render can't invalidate a ref.
+  // The grid is not virtualised and we keep at most one drawer open, so the list stays stable/ordered.
+  const expanders = () => {
+    const out = [];
+    for (const { r } of pinnedRowsNow()) {
+      if (!r.classList.contains('posweb-row-position')) continue;
+      const cell = r.querySelector('[col-id="sym"]'); if (!cell) continue;
       const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
-      if (!nameBtn) return;
-      const symbol = txt(nameBtn, '.posweb-cell-symbol-name_container > span') || clean(nameBtn.textContent).split(' ')[0];
-      positions.push({ ri, symbol, desc: txt(cell, '.posweb-cell-symbol-description'), sub: txt(cell, '.posweb-cell-a11y_indicator') });
+      if (isExpander(nameBtn)) out.push(nameBtn);
     }
-  });
-  positions.sort((x, y) => x.ri - y.ri); accounts.sort((x, y) => x.ri - y.ri);
-  const ownerFor = D => {
-    let sym = null; for (const p of positions) { if (p.ri <= D) sym = p; else break; }
-    let acc = null; for (const a of accounts) { if (a.ri <= D) acc = a; else break; }
-    return { sym, acc };
+    return out;
   };
+  const queue = [];
+  let curAcct = '';
+  pinnedRowsNow().forEach(({ r }) => {
+    if (r.classList.contains('posweb-row-account')) { curAcct = acctOf(r.querySelector('[col-id="sym"]')) || curAcct; return; }
+    if (!r.classList.contains('posweb-row-position')) return;
+    const cell = r.querySelector('[col-id="sym"]'); if (!cell) return;
+    const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
+    if (!isExpander(nameBtn)) return; // cash / non-expandable
+    queue.push({ account: curAcct, symbol: symOf(nameBtn), desc: txt(cell, '.posweb-cell-symbol-description'), sub: txt(cell, '.posweb-cell-a11y_indicator') });
+  });
+  const expanderCount = document.querySelectorAll(EXP).length;
+  if (!queue.length && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
+  console.log(`Reading ${queue.length} positions (${expanderCount} collapsed expanders) ONE at a time -- keeps the grid small so nothing is dropped; a large account can take several minutes...`);
 
   const H = heads => { const f = re => heads.findIndex(h => re.test(h.toLowerCase())); return { acq: f(/acquired/), term: f(/term/), qty: f(/quantity/), val: f(/current value/), avg: f(/average cost/), cost: f(/cost basis total/), gl: heads.findIndex(h => /gain\/loss/i.test(h) && h.includes('$')), glp: heads.findIndex(h => /gain\/loss/i.test(h) && h.includes('%')) }; };
-  const lots = [];
-  document.querySelectorAll('table.posweb-purchase-history').forEach(t => {
-    const heads = [...t.querySelectorAll('thead th, thead td')].map(c => clean(c.innerText));
-    const ix = H(heads);
-    const dr = t.closest('[role="row"]');
-    const D = dr ? parseInt(dr.getAttribute('row-index'), 10) : Infinity;
-    const { sym, acc } = ownerFor(D);
-    t.querySelectorAll('tbody tr').forEach(r => {
-      const c = [...r.children].map(x => clean(x.innerText));
-      const acq = ix.acq >= 0 ? c[ix.acq] : ''; if (!parseAcq(acq)) return;
-      lots.push({ account: acc ? acc.account : '', symbol: sym ? sym.symbol : '(unknown)', description: sym ? sym.desc : '', type: sym ? sym.sub : '', quantity: ix.qty >= 0 ? c[ix.qty] : '', acquired: acq, termComputed: termOf(parseAcq(acq)), termFidelity: ix.term >= 0 ? c[ix.term] : '', avgCost: ix.avg >= 0 ? c[ix.avg] : '', costTotal: ix.cost >= 0 ? c[ix.cost] : '', value: ix.val >= 0 ? c[ix.val] : '', gl: ix.gl >= 0 ? c[ix.gl] : '', glp: ix.glp >= 0 ? c[ix.glp] : '' });
-    });
-  });
+  const phTables = () => [...document.querySelectorAll('table.posweb-purchase-history')];
+  // The in-drawer "Purchase history" tab button (some drawers open on "Research"; clicking it only
+  // switches that drawer's own tab -- no href, never navigates; re-verified at runtime by safeClick).
+  const LOTS_TAB = 'button.posweb-header-tab-button[aria-controls^="posweb-drawer-tabpanel-lots"]';
+  const drawers = () => [...document.querySelectorAll('.posweb-drawer-detail')];
+  const rowsIn = d => [...d.querySelectorAll('table.posweb-purchase-history')].reduce((n, t) => n + t.querySelectorAll('tbody tr').length, 0);
+  const collapseOpen = () => document.querySelectorAll('.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="true"]').forEach(b => { try { safeClick(b); } catch (e) {} });
 
-  document.querySelectorAll('.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="true"]').forEach(b => { try { safeClick(b); } catch (e) {} });
+  const lots = [];
+  let done = 0, missed = 0;
+  for (let i = 0; i < queue.length; i++) {
+    const pos = queue[i];
+    // Start from a clean state: collapse any drawer left open (previous position or a manual expand)
+    // and wait until none remain, so the drawer we open next is unambiguously THIS position's.
+    collapseOpen();
+    await waitUntil(() => phTables().length === 0 && drawers().length === 0, 4000);
+    const before = new Set(drawers()); // any drawer that stubbornly stayed open -- excluded below
+    const btn = expanders()[i];
+    if (!btn) { missed++; continue; }
+    try { btn.scrollIntoView({ block: 'center' }); } catch (e) {}
+    if (btn.getAttribute('aria-expanded') !== 'true') { try { safeClick(btn); } catch (e) {} }
+    await waitUntil(() => btn.getAttribute('aria-expanded') === 'true', 2000);
+    // THIS position's drawer is the one that just APPEARED (identified by DOM node, not description),
+    // so a lingering stale drawer or a duplicate description can never be scraped in its place.
+    await waitUntil(() => drawers().some(d => !before.has(d)), 3000);
+    const drawer = drawers().find(d => !before.has(d)) || null;
+    if (!drawer) { missed++; collapseOpen(); continue; } // fail closed: never scrape an unidentified drawer
+    // if this drawer opened on the Research tab, switch it to Purchase history so the lots render
+    const tab = drawer.querySelector(LOTS_TAB);
+    if (tab && tab.getAttribute('aria-selected') !== 'true') { try { safeClick(tab); } catch (e) {} }
+    const gotRows = await waitUntil(() => rowsIn(drawer) > 0, 5000);
+    drawer.querySelectorAll('table.posweb-purchase-history').forEach(t => {
+      const ix = H([...t.querySelectorAll('thead th, thead td')].map(c => clean(c.innerText)));
+      t.querySelectorAll('tbody tr').forEach(r => {
+        const c = [...r.children].map(x => clean(x.innerText));
+        const acq = ix.acq >= 0 ? c[ix.acq] : ''; if (!parseAcq(acq)) return;
+        lots.push({ account: pos.account, symbol: pos.symbol, description: pos.desc, type: pos.sub, quantity: ix.qty >= 0 ? c[ix.qty] : '', acquired: acq, termComputed: termOf(parseAcq(acq)), termFidelity: ix.term >= 0 ? c[ix.term] : '', avgCost: ix.avg >= 0 ? c[ix.avg] : '', costTotal: ix.cost >= 0 ? c[ix.cost] : '', value: ix.val >= 0 ? c[ix.val] : '', gl: ix.gl >= 0 ? c[ix.gl] : '', glp: ix.glp >= 0 ? c[ix.glp] : '' });
+      });
+    });
+    if (!gotRows) missed++;
+    const cb = expanders()[i]; // collapse this drawer before the next one
+    if (cb && cb.getAttribute('aria-expanded') === 'true') { try { safeClick(cb); } catch (e) {} }
+    if (++done % 10 === 0) console.log(`  read ${done}/${queue.length} positions, ${lots.length} lots so far...`);
+  }
+  collapseOpen(); // safety net: collapse anything still open
+  if (missed) console.warn(`${missed} position(s) returned no purchase-history rows; if a symbol looks short, re-run.`);
 
   if (!lots.length) { console.warn('Parsed 0 lots. Ensure positions are listed and re-run; if still empty, use fidelity_dom_inspector.js.'); return; }
 
