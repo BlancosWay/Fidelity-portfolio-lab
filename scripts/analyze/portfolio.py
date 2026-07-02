@@ -24,7 +24,7 @@ import sqlite3
 import sys
 from urllib.request import pathname2url
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DB = os.path.join(REPO_ROOT, "data", "portfolio.db")
 
 MONTHS = {m: i for i, m in enumerate(
@@ -139,9 +139,10 @@ def load(csv_path, db_path=DEFAULT_DB, as_of=None):
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
-        missing = [h for h in EXPECTED_HEADERS if h not in headers]
-        if missing:
-            raise ValueError(f"CSV missing expected columns: {missing}")
+        if headers != EXPECTED_HEADERS:
+            raise ValueError(
+                "CSV headers do not match the expected export schema.\n"
+                f"  expected: {EXPECTED_HEADERS}\n  got:      {headers}")
         rows = list(reader)
 
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)

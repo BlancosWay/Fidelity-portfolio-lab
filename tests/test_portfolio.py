@@ -130,5 +130,43 @@ class QueryGuardTests(unittest.TestCase):
             conn.close()
 
 
+class HeaderContractTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = []
+
+    def tearDown(self):
+        for p in self._tmp:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+    def _write(self, header_line):
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        self._tmp.append(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(header_line + "\n")
+        return path
+
+    def test_default_db_is_repo_data_dir(self):
+        # DEFAULT_DB must resolve to <repo>/data/portfolio.db (one level above scripts/), not
+        # scripts/data/. Derive the expectation from portfolio.py's own location (name-agnostic).
+        analyze_dir = os.path.dirname(os.path.abspath(portfolio.__file__))  # <repo>/scripts/analyze
+        expected = os.path.normpath(os.path.join(analyze_dir, "..", "..", "data", "portfolio.db"))
+        self.assertEqual(os.path.normpath(portfolio.DEFAULT_DB), expected)
+
+    def test_exact_headers_required(self):
+        fd, db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._tmp.append(db)
+        reordered = "Symbol,Account," + ",".join(portfolio.EXPECTED_HEADERS[2:])
+        with self.assertRaises(ValueError):
+            portfolio.load(self._write(reordered), db, AS_OF)
+        extra = ",".join(portfolio.EXPECTED_HEADERS) + ",Extra"
+        with self.assertRaises(ValueError):
+            portfolio.load(self._write(extra), db, AS_OF)
+
+
 if __name__ == "__main__":
     unittest.main()
