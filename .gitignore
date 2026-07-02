@@ -1,0 +1,18 @@
+# === Financial data protection — never commit exported holdings ===
+# Ignore everything dropped into data/ (real Fidelity exports land here)…
+/data/*
+# …but keep the folder itself tracked.
+!/data/.gitkeep
+
+# Exported holdings / working data by extension, anywhere in the tree.
+*.csv
+# …except the tiny synthetic sample used by the test suite.
+!tests/sample_lots.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# === Python ===
+__pycache__/
+*.pyc
+.venv/
