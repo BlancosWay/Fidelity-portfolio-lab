@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a new analysis or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to analyze?
+      description: e.g. "unrealized gain per account", "concentration by symbol", "wash-sale candidates".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: A new `portfolio.py` subcommand, an ad-hoc `query`, or something else?
+    validations:
+      required: false
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This can be done with the existing local CSV (no new data source, no credentials).
+          required: true
+        - label: This keeps the stdlib-only, read-only, no-sensitive-data-in-git guarantees.
+          required: true

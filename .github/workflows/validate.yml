@@ -1,0 +1,104 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - name: Run the stdlib unittest suite
+        run: python -m unittest discover -s tests -v
+
+  compile:
+    name: Byte-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - name: Byte-compile all Python
+        run: python -m compileall -q scripts tests
+
+  data-safety:
+    name: Data safety
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - name: Ensure no real holdings or account identifiers are committed
+        run: python scripts/check_data_safety.py
+
+  js-syntax:
+    name: JS syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: node --check the browser scripts
+        # Node.js is preinstalled on ubuntu-latest; --check is parse-only (never executes).
+        run: |
+          set -euo pipefail
+          for f in scripts/browser/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
+  release-dryrun:
+    name: Release dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.x"
+      - name: Verify VERSION has non-empty release notes (same steps release.yml runs at tag time)
+        run: |
+          set -euo pipefail
+          python scripts/release_notes.py check
+          version="$(python scripts/release_notes.py current)"
+          python scripts/release_notes.py section "$version" > release-notes.md
+          test -s release-notes.md
+          echo "Release dry run OK for v$version:"; cat release-notes.md
+
+  changelog:
+    name: Changelog entry
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Require a CHANGELOG entry for shipped-path changes
+        run: |
+          set -euo pipefail
+          head_msg="$(git log -1 --format=%B "${{ github.event.pull_request.head.sha }}")"
+          if printf '%s' "$head_msg" | grep -qi '\[skip changelog\]'; then
+            echo "found [skip changelog] — skipping"; exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          if printf '%s\n' "$changed" | grep -qE '^(scripts/|tests/|SKILL\.md)'; then
+            if ! printf '%s\n' "$changed" | grep -q '^CHANGELOG\.md$'; then
+              echo "::error::A shipped-path change needs a CHANGELOG.md entry (or [skip changelog] in the head commit)."
+              exit 1
+            fi
+          fi
+          echo "changelog check ok"

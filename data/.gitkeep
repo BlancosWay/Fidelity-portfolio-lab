@@ -1,0 +1,2 @@
+# Real Fidelity exports (fidelity_lots.csv) land in this folder and are git-ignored.
+# This .gitkeep keeps the otherwise-empty folder tracked. Do not commit exports here.

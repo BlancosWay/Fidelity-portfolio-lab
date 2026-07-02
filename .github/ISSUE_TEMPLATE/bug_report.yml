@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a problem with the exporter or analyzer
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! **Do not paste real account numbers or holdings.** Redact any
+        `fidelity_lots.csv` rows before sharing.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      options:
+        - Browser exporter (fidelity_lot_export.js)
+        - DOM inspector (fidelity_dom_inspector.js)
+        - Analyzer (portfolio.py)
+        - CI / release pipeline
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands run, or where in the Fidelity UI the export stalled. Redact real data.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, browser (for the exporter).
+      placeholder: "Windows 11, Python 3.12, Chrome 140"
+    validations:
+      required: false

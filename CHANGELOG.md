@@ -1,0 +1,27 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-07-02
+### Added
+- Read-only Fidelity per-lot browser exporter (`scripts/browser/fidelity_lot_export.js`) that runs
+  in the user's own session, scrapes the AG-grid `posweb-purchase-history` lot tables, computes
+  long/short holding term, and downloads a local `fidelity_lots.csv`. Makes zero network calls and
+  clicks only Fidelity's own lot-expand buttons.
+- Read-only DOM inspector (`scripts/browser/fidelity_dom_inspector.js`) for re-tuning selectors if
+  Fidelity changes its Positions UI.
+- Stdlib-only SQLite analyzer (`scripts/analyze/portfolio.py`) with `load`, `summary`, `symbol`,
+  `accounts`, and a hardened read-only `query` subcommand. Recomputes holding term authoritatively
+  (long > 1 year, short <= 1 year; Feb-29 clamps to Feb-28).
+- Test suite (`tests/`): analyzer correctness incl. term boundaries, a static browser-safety scan,
+  a data-safety scan, and release-notes checks.
+- Copilot skill definition (`SKILL.md`) and project `README.md`.
+- CI pipeline, release automation, and owner/Dependabot auto-merge.
+
+[Unreleased]: https://github.com/BlancosWay/Fidelity-portfolio-lab/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/BlancosWay/Fidelity-portfolio-lab/releases/tag/v0.1.0

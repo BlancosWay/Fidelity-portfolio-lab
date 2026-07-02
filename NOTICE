@@ -1,0 +1,18 @@
+Fidelity-portfolio-lab
+Copyright (c) 2026 BlancosWay
+
+This product is licensed under the MIT License (see LICENSE).
+
+--------------------------------------------------------------------------------
+NOT AFFILIATED WITH FIDELITY
+
+"Fidelity" and "Fidelity Investments" are trademarks of FMR LLC. This project is
+an independent, unofficial tool and is not affiliated with, endorsed by, or
+sponsored by Fidelity Investments or FMR LLC.
+
+This software does not use any Fidelity API, does not store or transmit
+credentials, and does not automate login. Data is obtained only when the user
+manually runs a read-only script in their own already-authenticated browser
+session and exports a local CSV. Term classifications are a convenience for
+organizing holdings and are NOT tax advice.
+--------------------------------------------------------------------------------
