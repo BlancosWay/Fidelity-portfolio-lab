@@ -6,16 +6,16 @@
  *   - No credential/storage reads (no document.cookie / localStorage / sessionStorage).
  *   - Runs in YOUR already-authenticated session; only reads the DOM and downloads a local CSV.
  *   - The ONLY elements it clicks are Fidelity's own lot-expand buttons
- *     (button.posweb-cell-symbol-name[aria-expanded]) and a local download anchor. It never clicks
- *     trade/links and never navigates.
+ *     (button.posweb-cell-symbol-name[aria-expanded]), the read-only "Expand groups" button, and a
+ *     local download anchor. It never clicks trade/links and never navigates.
  *   - "long" = held > 1 year, "short" = held <= 1 year, from each lot's Acquired date (Feb-29
  *     acquisitions clamp to Feb-28 so Mar-1 is their first long-term day). Verified against
  *     Fidelity's own Term column on 277 real lots.
  *
- * USE: On Fidelity "Positions" (All accounts is fine), make sure positions are listed (click
- * "Expand groups" if collapsed). Console (Ctrl+Shift+J); if prompted type: allow pasting. Paste
- * this whole file. It expands each position one at a time (~1-2 min for large accounts), prints
- * summaries, downloads fidelity_lots.csv, then collapses everything back.
+ * USE: On Fidelity "Positions" (All accounts is fine). Console (Ctrl+Shift+J); if prompted type:
+ * allow pasting. Paste this whole file. It auto-expands any collapsed account groups, then expands
+ * each position one at a time (~1-2 min for large accounts), prints summaries, downloads
+ * fidelity_lots.csv, then collapses the positions back.
  */
 (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -56,29 +56,36 @@
     return false;
   };
 
-  // Phase 0 -- auto-expand any collapsed account groups so every position renders before we scrape.
-  // On the "All accounts" view, positions are grouped under collapsible "Account:" rows; a collapsed
-  // group's positions are not in the DOM. We click Fidelity's own read-only "Expand groups" control
-  // (and, as a fallback, each collapsed group row's expand toggle). Expanding a group mutates nothing.
-  const collapsedGroups = () => [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"].ag-row-group-contracted')];
-  if (collapsedGroups().length) {
-    console.log('Expanding collapsed account groups...');
-    let g = [...document.querySelectorAll('button')].find(x => /^\s*expand\s+groups?\s*$/i.test(x.textContent || ''));
-    if (g) { try { safeClick(g); } catch (e) {} await sleep(1500); }
-    let gguard = 0;
-    while (collapsedGroups().length && gguard++ < 80) {
-      g = collapsedGroups()[0].querySelector('.ag-group-contracted, [class*="group-contracted"]');
-      if (!g) break;
-      try { safeClick(g); } catch (e) {}
-      await sleep(250);
+  // Phase 0 -- auto-expand any collapsed account groups so every position is in the DOM before we
+  // scrape. On the "All accounts" view, positions live under collapsible "Account:" rows. A collapsed
+  // account is detected STRUCTURALLY -- an "Account:" row (.posweb-row-account) with no position row
+  // (.posweb-row-position) immediately after it -- because Fidelity leaves the ag-row-group-contracted
+  // class on rows even when they are expanded, so that class must NOT be used to decide. When
+  // something is collapsed we click Fidelity's own read-only "Expand groups" button (which expands
+  // all). We never click when positions are already visible (so nothing gets toggled shut) and we
+  // never abort: if a group stays collapsed we scrape what is present and warn, so a working export is
+  // never blocked.
+  const plRowsOrdered = () => [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')]
+    .map(r => ({ r, ri: parseInt(r.getAttribute('row-index'), 10) }))
+    .filter(x => !isNaN(x.ri)).sort((a, b) => a.ri - b.ri);
+  const positionRows = () => document.querySelectorAll('.ag-pinned-left-cols-container [role="row"].posweb-row-position');
+  const collapsedGroups = () => {
+    const rows = plRowsOrdered(), out = [];
+    for (let k = 0; k < rows.length; k++) {
+      if (!rows[k].r.classList.contains('posweb-row-account')) continue;
+      const next = rows[k + 1] && rows[k + 1].r;
+      if (!next || next.classList.contains('posweb-row-account')) out.push(rows[k].r); // header with no rows under it
     }
-    await sleep(800);
-  }
+    return out;
+  };
   if (collapsedGroups().length) {
-    console.warn(`Could not expand ${collapsedGroups().length} account group(s); aborting to avoid a partial export. Please expand your account groups manually (click each "Account:" row) and re-run.`);
-    return;
+    console.log(`Expanding ${collapsedGroups().length} collapsed account group(s)...`);
+    const g = [...document.querySelectorAll('button')].find(x => /^\s*expand\s+groups?\s*$/i.test(clean(x.textContent)));
+    if (g) { try { safeClick(g); } catch (e) {} await waitUntil(() => !collapsedGroups().length && positionRows().length > 0, 6000); }
+    if (collapsedGroups().length) {
+      console.warn(`${collapsedGroups().length} account group(s) still collapsed; their positions may be omitted. Click "Expand groups" (or each "Account:" row) and re-run for a complete export.`);
+    }
   }
-
   const total = document.querySelectorAll(EXP).length;
   if (!total && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
   console.log(`Expanding ${total} positions... (~1-2 min for large accounts; one lot drawer at a time)`);

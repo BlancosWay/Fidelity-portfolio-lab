@@ -8,16 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Added
 - The browser exporter now **auto-expands collapsed account groups** on the "All accounts" view
-  (via Fidelity's own read-only "Expand groups" control, with a per-group toggle fallback), so all
-  positions render before scraping — no manual "Expand groups" click required.
+  (via Fidelity's own read-only "Expand groups" button), so all positions render before scraping —
+  no manual "Expand groups" click required. A collapsed group is detected **structurally** (an
+  "Account:" row with no position rows beneath it), not by the `ag-row-group-contracted` CSS class,
+  which Fidelity leaves on rows even when they are expanded.
 
 ### Changed
 - Hardened the browser scripts' read-only guarantee: **all clicks now route through a single
   `safeClick(el)` helper** that verifies the element at runtime and refuses anything that isn't the
   local blob-download anchor or a Fidelity expander/group toggle (a link is never clicked). The
   static safety scan now also bans selecting anchors/links and requires the `safeClick` guard.
-- The exporter **aborts instead of exporting a partial CSV** if any account group is still collapsed
-  after auto-expand.
+- The exporter **never blocks a working export**: it clicks "Expand groups" only when a group is
+  genuinely collapsed (so already-visible positions are never toggled shut), and if a group stays
+  collapsed it scrapes what is present and warns rather than aborting.
 
 ## [0.1.0] - 2026-07-02
 ### Added
