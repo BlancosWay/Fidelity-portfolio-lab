@@ -26,13 +26,15 @@ Help the user export their Fidelity per-lot holdings **compliantly** and analyze
 
 ### 1. Export (the user runs this in their browser)
 Guide the user to:
-1. Open Fidelity → **Positions** (All accounts is fine). Ensure positions are listed (click
-   **"Expand groups"** if an account is collapsed).
+1. Open Fidelity → **Positions** (All accounts is fine).
 2. Open the DevTools console (**Ctrl+Shift+J**); if prompted, type `allow pasting`.
 3. Paste the entire contents of **`scripts/browser/fidelity_lot_export.js`** and press Enter.
-4. It expands each position one at a time (~1-2 min for large accounts), prints per-symbol and
-   per-account summaries, and downloads **`fidelity_lots.csv`** (usually to `~/Downloads`), then
-   collapses everything back.
+4. It **auto-expands any collapsed account groups**, then expands each position one at a time
+   (~1-2 min for large accounts), prints per-symbol and per-account summaries, and downloads
+   **`fidelity_lots.csv`** (usually to `~/Downloads`), then collapses everything back.
+
+   (If your positions are already listed you needn't do anything first. If auto-expand ever
+   can't find the control, manually expand the **"Account:"** groups and re-run.)
 
 If it reports **0 lots** (Fidelity changed its Positions UI), have the user run
 `scripts/browser/fidelity_dom_inspector.js` and share the downloaded `fidelity_dom_report.txt` so the

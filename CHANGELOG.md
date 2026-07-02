@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- The browser exporter now **auto-expands collapsed account groups** on the "All accounts" view
+  (via Fidelity's own read-only "Expand groups" control, with a per-group toggle fallback), so all
+  positions render before scraping — no manual "Expand groups" click required.
+
+### Changed
+- Hardened the browser scripts' read-only guarantee: **all clicks now route through a single
+  `safeClick(el)` helper** that verifies the element at runtime and refuses anything that isn't the
+  local blob-download anchor or a Fidelity expander/group toggle (a link is never clicked). The
+  static safety scan now also bans selecting anchors/links and requires the `safeClick` guard.
+- The exporter **aborts instead of exporting a partial CSV** if any account group is still collapsed
+  after auto-expand.
 
 ## [0.1.0] - 2026-07-02
 ### Added

@@ -55,6 +55,12 @@
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'fidelity_dom_report.txt';
-  document.body.appendChild(a); a.click(); a.remove();
+  // safeClick -- the ONLY click in this read-only inspector: it clicks the local blob-download
+  // anchor and refuses anything else (it never clicks a link or page control).
+  const safeClick = el => {
+    if (el && el.tagName === 'A' && el.download && String(el.href || '').startsWith('blob:')) { el.click(); return true; }
+    return false;
+  };
+  document.body.appendChild(a); safeClick(a); a.remove();
   console.log('%cSaved fidelity_dom_report.txt', 'color:green;font-weight:bold');
 })();
