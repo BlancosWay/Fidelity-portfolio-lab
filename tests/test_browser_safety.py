@@ -275,6 +275,8 @@ class BrowserSafety(unittest.TestCase):
         self.assertIn('button.posweb-cell-symbol-name[aria-expanded="true"]', src)
         self.assertIn("posweb-cell-symbol-name", src)  # okExpander runtime check
         self.assertIn("group-contracted", src)         # okGroup runtime check
+        self.assertIn("posweb-header-tab-button", src)  # okLotsTab runtime check
+        self.assertIn("posweb-drawer-tabpanel-lots", src)  # Purchase-history lots panel target
         self.assertIn("posweb-row-account", src)        # account-group collapse detection
         self.assertIn("posweb-row-position", src)       # position-row (expanded) detection
 
