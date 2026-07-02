@@ -275,7 +275,8 @@ class BrowserSafety(unittest.TestCase):
         self.assertIn('button.posweb-cell-symbol-name[aria-expanded="true"]', src)
         self.assertIn("posweb-cell-symbol-name", src)  # okExpander runtime check
         self.assertIn("group-contracted", src)         # okGroup runtime check
-        self.assertIn("ag-row-group-contracted", src)  # collapsed-group scoping
+        self.assertIn("posweb-row-account", src)        # account-group collapse detection
+        self.assertIn("posweb-row-position", src)       # position-row (expanded) detection
 
     def test_inspector_is_safe(self):
         self._scan(INSPECTOR, {"el"})
