@@ -40,11 +40,14 @@ Real data:
 ## Commands
 | Command | Purpose |
 |---|---|
-| `load <csv> [--as-of YYYY-MM-DD] [--db PATH]` | Load an export; recompute term as-of a date (default today). |
+| `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). |
 | `summary` | Units per symbol across accounts; long vs short; per-account by term. |
 | `symbol <SYM>` | Per-lot detail + totals for one symbol. |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
+
+> `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
+> e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),
