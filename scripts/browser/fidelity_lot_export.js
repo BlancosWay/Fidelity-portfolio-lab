@@ -6,8 +6,9 @@
  *   - No credential/storage reads (no document.cookie / localStorage / sessionStorage).
  *   - Runs in YOUR already-authenticated session; only reads the DOM and downloads a local CSV.
  *   - The ONLY elements it clicks are Fidelity's own lot-expand buttons
- *     (button.posweb-cell-symbol-name[aria-expanded]), the read-only "Expand groups" button, and a
- *     local download anchor. It never clicks trade/links and never navigates.
+ *     (button.posweb-cell-symbol-name[aria-expanded]), the read-only "Expand groups" button, the
+ *     in-drawer "Purchase history" tab button, and a local download anchor. It never clicks
+ *     trade/links and never navigates.
  *   - "long" = held > 1 year, "short" = held <= 1 year, from each lot's Acquired date (Feb-29
  *     acquisitions clamp to Feb-28 so Mar-1 is their first long-term day). Verified against
  *     Fidelity's own Term column on 277 real lots.
@@ -37,9 +38,10 @@
   const waitUntil = async (fn, t) => { const t0 = Date.now(); while (Date.now() - t0 < t) { if (fn()) return true; await sleep(80); } return false; };
 
   // safeClick -- the ONLY place a click happens. It verifies the element at RUNTIME and refuses
-  // anything that is not one of our three approved read-only targets: the local blob-download
-  // anchor, a Fidelity position lot-expander button, or an account-group expand toggle. A link or
-  // any other element is never clicked -- defence in depth for the read-only / no-navigation model.
+  // anything that is not one of our four approved read-only targets: the local blob-download anchor,
+  // a Fidelity position lot-expander button, an account-group expand toggle, or the in-drawer
+  // "Purchase history" tab button. A link or any other element is never clicked -- defence in depth
+  // for the read-only / no-navigation model.
   const safeClick = el => {
     if (!el || !el.tagName) return false;
     // The ONLY anchor we ever click is our own local blob-download link; every other link is refused.
@@ -52,7 +54,10 @@
     const cls = String(el.className || '');
     const okExpander = el.tagName === 'BUTTON' && /posweb-cell-symbol-name/.test(cls);
     const okGroup = /group-contracted/.test(cls) || (el.tagName === 'BUTTON' && /^\s*expand\s+groups?\s*$/i.test(el.textContent || ''));
-    if (okExpander || okGroup) { el.click(); return true; }
+    // The in-drawer "Purchase history" tab: a <button role="tab"> that controls a "...tabpanel-lots..."
+    // panel. Clicking it only switches the drawer's tab -- it has no href and never navigates.
+    const okLotsTab = el.tagName === 'BUTTON' && /posweb-header-tab-button/.test(cls) && el.getAttribute('role') === 'tab' && /^posweb-drawer-tabpanel-lots/.test(el.getAttribute('aria-controls') || '');
+    if (okExpander || okGroup || okLotsTab) { el.click(); return true; }
     return false;
   };
 
@@ -98,8 +103,28 @@
     await waitUntil(() => document.querySelectorAll(EXP).length < before, 1800);
     if (++done % 10 === 0) console.log(`  expanded ${done}/${total}...`);
   }
+  // Some accounts open the position drawer on the "Research" tab, so the Purchase-history lot table
+  // (table.posweb-purchase-history, rendered inside the "...tabpanel-lots..." panel) is absent.
+  // Activate each drawer's "Purchase history" tab -- Fidelity's own in-drawer <button role="tab"> --
+  // so the lots render before we scrape. Clicking it only switches the drawer's tab; it has no href
+  // and never navigates (safeClick verifies this at runtime). Drawers already on Purchase history
+  // (aria-selected="true") are left untouched, so this is a no-op on accounts that default to it.
+  const LOTS_TAB = 'button.posweb-header-tab-button[aria-controls^="posweb-drawer-tabpanel-lots"]';
+  const lotTabs = [...document.querySelectorAll(LOTS_TAB)].filter(b => b.getAttribute('aria-selected') !== 'true');
+  if (lotTabs.length) {
+    console.log(`Switching ${lotTabs.length} drawer(s) to the Purchase history tab...`);
+    lotTabs.forEach(b => { try { safeClick(b); } catch (e) {} });
+  }
   console.log('Waiting for lot data to finish loading...');
-  await sleep(2800);
+  await sleep(2800); // floor: let the first drawers' lot tables start rendering
+  // Then wait until the lot-table count STOPS growing (stabilises) so large accounts finish their
+  // lazy loads before we scrape; breaks after ~1.6s with no change, hard cap ~25s.
+  let lastCount = -1, stableTicks = 0, waited = 0;
+  while (waited < 25000) {
+    const c = document.querySelectorAll('table.posweb-purchase-history').length;
+    if (c === lastCount) { if (++stableTicks >= 4) break; } else { stableTicks = 0; lastCount = c; }
+    await sleep(400); waited += 400;
+  }
 
   const plRows = [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')];
   const positions = [], accounts = [];

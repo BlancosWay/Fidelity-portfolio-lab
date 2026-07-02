@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Account:" row with no position rows beneath it), not by the `ag-row-group-contracted` CSS class,
   which Fidelity leaves on rows even when they are expanded.
 
+### Fixed
+- The exporter now parses lots on accounts whose position drawer opens on the **Research** tab. It
+  activates each drawer's **"Purchase history"** tab (Fidelity's own in-drawer `<button role="tab">`
+  that controls the `posweb-drawer-tabpanel-lots` panel) so `table.posweb-purchase-history` renders
+  before scraping. Previously such accounts produced "Parsed 0 lots" because the lot table was never
+  rendered. Drawers already on Purchase history are left untouched (no-op), and the click routes
+  through the runtime `safeClick` guard (the tab button has no `href` and never navigates).
+
 ### Changed
 - Hardened the browser scripts' read-only guarantee: **all clicks now route through a single
   `safeClick(el)` helper** that verifies the element at runtime and refuses anything that isn't the
