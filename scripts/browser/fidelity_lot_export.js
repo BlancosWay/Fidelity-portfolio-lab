@@ -36,15 +36,58 @@
   const EXP = '.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="false"]';
   const waitUntil = async (fn, t) => { const t0 = Date.now(); while (Date.now() - t0 < t) { if (fn()) return true; await sleep(80); } return false; };
 
+  // safeClick -- the ONLY place a click happens. It verifies the element at RUNTIME and refuses
+  // anything that is not one of our three approved read-only targets: the local blob-download
+  // anchor, a Fidelity position lot-expander button, or an account-group expand toggle. A link or
+  // any other element is never clicked -- defence in depth for the read-only / no-navigation model.
+  const safeClick = el => {
+    if (!el || !el.tagName) return false;
+    // The ONLY anchor we ever click is our own local blob-download link; every other link is refused.
+    if (el.tagName === 'A') {
+      if (el.download && String(el.href || '').startsWith('blob:')) { el.click(); return true; }
+      return false;
+    }
+    // Refuse any element nested inside a link (a bubbled click could navigate).
+    for (let p = el.parentElement; p; p = p.parentElement) { if (p.tagName === 'A') return false; }
+    const cls = String(el.className || '');
+    const okExpander = el.tagName === 'BUTTON' && /posweb-cell-symbol-name/.test(cls);
+    const okGroup = /group-contracted/.test(cls) || (el.tagName === 'BUTTON' && /^\s*expand\s+groups?\s*$/i.test(el.textContent || ''));
+    if (okExpander || okGroup) { el.click(); return true; }
+    return false;
+  };
+
+  // Phase 0 -- auto-expand any collapsed account groups so every position renders before we scrape.
+  // On the "All accounts" view, positions are grouped under collapsible "Account:" rows; a collapsed
+  // group's positions are not in the DOM. We click Fidelity's own read-only "Expand groups" control
+  // (and, as a fallback, each collapsed group row's expand toggle). Expanding a group mutates nothing.
+  const collapsedGroups = () => [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"].ag-row-group-contracted')];
+  if (collapsedGroups().length) {
+    console.log('Expanding collapsed account groups...');
+    let g = [...document.querySelectorAll('button')].find(x => /^\s*expand\s+groups?\s*$/i.test(x.textContent || ''));
+    if (g) { try { safeClick(g); } catch (e) {} await sleep(1500); }
+    let gguard = 0;
+    while (collapsedGroups().length && gguard++ < 80) {
+      g = collapsedGroups()[0].querySelector('.ag-group-contracted, [class*="group-contracted"]');
+      if (!g) break;
+      try { safeClick(g); } catch (e) {}
+      await sleep(250);
+    }
+    await sleep(800);
+  }
+  if (collapsedGroups().length) {
+    console.warn(`Could not expand ${collapsedGroups().length} account group(s); aborting to avoid a partial export. Please expand your account groups manually (click each "Account:" row) and re-run.`);
+    return;
+  }
+
   const total = document.querySelectorAll(EXP).length;
-  if (!total && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Click "Expand groups" so positions are listed, then retry.'); return; }
+  if (!total && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
   console.log(`Expanding ${total} positions... (~1-2 min for large accounts; one lot drawer at a time)`);
   let done = 0, guard = 0;
   while (guard++ < total + 20) {
     const btns = [...document.querySelectorAll(EXP)];
     if (!btns.length) break;
     const before = btns.length, b = btns[0];
-    try { b.scrollIntoView({ block: 'center' }); b.click(); } catch (e) {}
+    try { b.scrollIntoView({ block: 'center' }); safeClick(b); } catch (e) {}
     await waitUntil(() => document.querySelectorAll(EXP).length < before, 1800);
     if (++done % 10 === 0) console.log(`  expanded ${done}/${total}...`);
   }
@@ -88,7 +131,7 @@
     });
   });
 
-  document.querySelectorAll('.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="true"]').forEach(b => { try { b.click(); } catch (e) {} });
+  document.querySelectorAll('.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="true"]').forEach(b => { try { safeClick(b); } catch (e) {} });
 
   if (!lots.length) { console.warn('Parsed 0 lots. Ensure positions are listed and re-run; if still empty, use fidelity_dom_inspector.js.'); return; }
 
@@ -112,6 +155,6 @@
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = 'fidelity_lots.csv';
-  document.body.appendChild(a); a.click(); a.remove();
+  document.body.appendChild(a); safeClick(a); a.remove();
   console.log('%cSaved fidelity_lots.csv', 'color:green;font-weight:bold');
 })();

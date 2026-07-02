@@ -38,9 +38,10 @@ python scripts/analyze/portfolio.py --db data/portfolio.db summary
 ```
 
 Real data:
-1. Fidelity → **Positions** (All accounts). Click **"Expand groups"** so positions are listed.
+1. Fidelity → **Positions** (All accounts).
 2. Console (**Ctrl+Shift+J**); if prompted, type `allow pasting`.
-3. Paste all of `scripts/browser/fidelity_lot_export.js`, Enter. It downloads `fidelity_lots.csv`.
+3. Paste all of `scripts/browser/fidelity_lot_export.js`, Enter. It **auto-expands collapsed account
+   groups**, scrapes every lot, and downloads `fidelity_lots.csv`.
 4. `python scripts/analyze/portfolio.py load path/to/fidelity_lots.csv`
 5. `python scripts/analyze/portfolio.py summary` (or `symbol <SYM>`, `accounts`, or `query "SELECT ..."`).
 
