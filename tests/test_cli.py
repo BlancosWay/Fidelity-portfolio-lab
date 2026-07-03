@@ -85,5 +85,19 @@ class HarvestCliTests(unittest.TestCase):
         self.assertIn("not tax advice", text)
 
 
+class RipeningCliTests(unittest.TestCase):
+    def test_output(self):
+        db = build_db(SAMPLE_ROWS)
+        try:
+            text = run(portfolio.cmd_ripening, db, AS_OF, None, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("LOSSA", text)   # short-term loss -> ripening loser
+        self.assertIn("GAINC", text)   # short-term gain -> ripening winner
+        self.assertNotIn("LOSSB", text)  # long-term, excluded
+        self.assertNotIn("LOSSD", text)  # Roth IRA excluded
+        self.assertIn("HARVEST BEFORE RIPENING", text)
+
+
 if __name__ == "__main__":
     unittest.main()

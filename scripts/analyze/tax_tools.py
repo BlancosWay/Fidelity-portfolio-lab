@@ -13,7 +13,7 @@ gain_loss_pct.
 import datetime as dt
 import re
 
-from common import holding_term
+from common import holding_term, one_year_anniversary
 
 # Account is tax-advantaged (no capital-gains treatment -> excluded from harvesting/ripening) when its
 # name mentions any of these; otherwise it is a taxable account.
@@ -138,5 +138,51 @@ def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15):
         "total_loss": st_loss + lt_loss,
         "est_benefit": abs(st_loss) * st_rate + abs(lt_loss) * lt_rate,
         "has_options": any(r["is_option"] for r in rows),
+    }
+    return rows, summary
+
+
+def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
+    """Taxable short-term lots and the date each becomes long-term.
+
+    ``ripens_on`` is the first long-term day = one-year anniversary + 1 day (reusing the Feb-29 clamp).
+    Winners (gain > 0) show the estimated tax saved by waiting ``gain*(st_rate-lt_rate)``; losers
+    (gain < 0) get a "HARVEST BEFORE RIPENING" hint (keep the more valuable short-term loss). Optional
+    ``within`` filters to lots ripening within N days. Sorted by ``ripens_on`` ascending."""
+    rows = []
+    for lot in lots:
+        if is_cash(lot) or not is_taxable(lot.get("account")):
+            continue
+        acq = lot_acquired_date(lot)
+        if acq is None or holding_term(acq, as_of) != "Short-Term":
+            continue  # only short-term lots ripen
+        ripens_on = one_year_anniversary(acq) + dt.timedelta(days=1)
+        days_until = (ripens_on - as_of).days
+        if within is not None and days_until > within:
+            continue
+        gl = lot.get("gain_loss")
+        gl = float(gl) if gl is not None else 0.0
+        if gl > 0:
+            hint, tax_saved = "wait for LT", gl * (st_rate - lt_rate)
+        elif gl < 0:
+            hint, tax_saved = "HARVEST BEFORE RIPENING", 0.0
+        else:
+            hint, tax_saved = "", 0.0
+        rows.append({
+            "account": lot.get("account"),
+            "symbol": lot.get("symbol"),
+            "acquired": acq.isoformat(),
+            "ripens_on": ripens_on.isoformat(),
+            "days_until": days_until,
+            "gain_loss": gl,
+            "hint": hint,
+            "tax_saved_by_waiting": tax_saved,
+        })
+    rows.sort(key=lambda r: (r["ripens_on"], r["account"], r["symbol"]))
+    summary = {
+        "count": len(rows),
+        "winners": sum(1 for r in rows if r["gain_loss"] > 0),
+        "losers": sum(1 for r in rows if r["gain_loss"] < 0),
+        "total_tax_saved_by_waiting": sum(r["tax_saved_by_waiting"] for r in rows),
     }
     return rows, summary

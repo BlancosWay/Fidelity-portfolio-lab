@@ -257,6 +257,22 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate):
         print("  Note: includes option lots -- verify your own tax treatment for options.")
 
 
+def cmd_ripening(db_path, as_of, within, st_rate, lt_rate):
+    rows, s = tax_tools.ripening(fetch_lots(db_path), as_of, st_rate, lt_rate, within)
+    if not rows:
+        print("No taxable short-term lots ripening" + (f" within {within} days." if within else "."))
+        return
+    _print_table(
+        ["Account", "Symbol", "Acquired", "Ripens", "Days", "G/L $", "Hint"],
+        [(r["account"], r["symbol"], r["acquired"], r["ripens_on"], r["days_until"],
+          round(r["gain_loss"], 2), r["hint"]) for r in rows],
+    )
+    print(f"\nRipening (taxable short-term lots, as of {as_of}): {s['count']} lots "
+          f"({s['winners']} winners, {s['losers']} losers).")
+    print(f"  Est. tax saved by waiting for long-term on winners (ST@{st_rate:.0%} vs LT@{lt_rate:.0%}): "
+          f"~${s['total_tax_saved_by_waiting']:,.2f}  [estimate, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -274,6 +290,11 @@ def main(argv=None):
     hp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     hp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     hp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
+    rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    rp.add_argument("--within", type=int, help="only lots ripening within N days")
+    rp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    rp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -292,6 +313,8 @@ def main(argv=None):
         print(f"({len(rows)} rows)")
     elif args.cmd == "harvest":
         cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
+    elif args.cmd == "ripening":
+        cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     return 0
 
 

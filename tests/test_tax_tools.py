@@ -125,5 +125,60 @@ class HarvestTests(unittest.TestCase):
         self.assertTrue(s["has_options"])
 
 
+class RipeningTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_winner_loser_and_filters(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="WIN", gain_loss=1000.0,
+                date_acquired="2025-12-01", term="Short-Term"),
+            lot(account="Individual - TOD Test", symbol="LOSE", gain_loss=-200.0,
+                date_acquired="2026-01-15", term="Short-Term"),
+            lot(account="Individual - TOD Test", symbol="LTOLD", gain_loss=500.0,
+                date_acquired="2024-01-01", term="Long-Term"),        # long-term -> excluded
+            lot(account="Roth IRA Test", symbol="IRA", gain_loss=10.0,
+                date_acquired="2026-06-01", term="Short-Term"),       # tax-advantaged -> excluded
+            lot(account="Individual - TOD Test", symbol="CASH", gain_loss=None,
+                date_acquired="", term=""),                           # cash -> excluded
+        ]
+        rows, s = tt.ripening(lots, self.AS_OF, st_rate=0.30, lt_rate=0.20)
+        self.assertEqual({r["symbol"] for r in rows}, {"WIN", "LOSE"})
+        win = next(r for r in rows if r["symbol"] == "WIN")
+        self.assertEqual(win["ripens_on"], "2026-12-02")
+        self.assertEqual(win["hint"], "wait for LT")
+        self.assertAlmostEqual(win["tax_saved_by_waiting"], 1000 * (0.30 - 0.20))
+        lose = next(r for r in rows if r["symbol"] == "LOSE")
+        self.assertEqual(lose["hint"], "HARVEST BEFORE RIPENING")
+        self.assertEqual((s["winners"], s["losers"]), (1, 1))
+
+    def test_leap_boundary(self):
+        lots = [lot(account="Individual - TOD Test", symbol="LEAP", gain_loss=5.0,
+                    date_acquired="2024-02-29", term="Short-Term")]
+        rows, _ = tt.ripening(lots, dt.date(2025, 2, 28))
+        self.assertEqual(rows[0]["ripens_on"], "2025-03-01")  # first long-term day
+        self.assertEqual(rows[0]["days_until"], 1)
+
+    def test_within_filter_and_order(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="SOON", gain_loss=1.0,
+                date_acquired="2025-07-10", term="Short-Term"),
+            lot(account="Individual - TOD Test", symbol="LATER", gain_loss=1.0,
+                date_acquired="2026-01-10", term="Short-Term"),
+        ]
+        rows, _ = tt.ripening(lots, self.AS_OF, within=30)
+        self.assertEqual([r["symbol"] for r in rows], ["SOON"])
+
+    def test_ignores_stale_stored_term(self):
+        # Term is recomputed from the date, not trusted from the stored column.
+        lots = [
+            lot(account="Individual - TOD Test", symbol="ACTUALLY_LT", gain_loss=5.0,
+                date_acquired="2025-01-01", term="Short-Term"),   # really long-term now -> excluded
+            lot(account="Individual - TOD Test", symbol="ACTUALLY_ST", gain_loss=5.0,
+                date_acquired="2026-06-01", term="Long-Term"),    # really short-term -> included
+        ]
+        rows, _ = tt.ripening(lots, self.AS_OF)
+        self.assertEqual([r["symbol"] for r in rows], ["ACTUALLY_ST"])
+
+
 if __name__ == "__main__":
     unittest.main()
