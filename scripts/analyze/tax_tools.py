@@ -10,7 +10,10 @@ A "lot" dict uses the ``lots`` table columns: account, symbol, description, marg
 date_acquired (ISO string or None), term, avg_cost_basis, cost_basis_total, current_value, gain_loss,
 gain_loss_pct.
 """
+import datetime as dt
 import re
+
+from common import holding_term
 
 # Account is tax-advantaged (no capital-gains treatment -> excluded from harvesting/ripening) when its
 # name mentions any of these; otherwise it is a taxable account.
@@ -86,3 +89,54 @@ def taxable_loss_candidates(lots):
         except (TypeError, ValueError):
             continue
     return out
+
+
+def lot_acquired_date(lot):
+    """datetime.date for a lot's stored ISO ``date_acquired``, or None."""
+    d = lot.get("date_acquired")
+    if not d:
+        return None
+    try:
+        return dt.date.fromisoformat(str(d))
+    except (TypeError, ValueError):
+        return None
+
+
+def recompute_term(lot, as_of):
+    """Holding term recomputed from the acquisition date as of ``as_of`` (the DB does not persist
+    ``load``'s as-of); falls back to the stored ``term`` when the date is missing."""
+    return holding_term(lot_acquired_date(lot), as_of) or (lot.get("term") or "")
+
+
+def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15):
+    """Rank taxable loss lots for harvesting: short-term first (ST losses offset ordinary income),
+    then by loss magnitude (most negative first).
+
+    Returns ``(rows, summary)``. ``summary`` keeps signed ST/LT loss totals and a POSITIVE estimated
+    avoided-tax benefit ``abs(st_loss)*st_rate + abs(lt_loss)*lt_rate`` (an estimate, not tax advice)."""
+    rows = []
+    for lot in taxable_loss_candidates(lots):
+        rows.append({
+            "account": lot.get("account"),
+            "symbol": lot.get("symbol"),
+            "term": recompute_term(lot, as_of),
+            "quantity": lot.get("quantity"),
+            "cost_basis_total": lot.get("cost_basis_total"),
+            "current_value": lot.get("current_value"),
+            "loss": float(lot["gain_loss"]),          # negative
+            "loss_pct": lot.get("gain_loss_pct"),
+            "is_option": security_key(lot.get("symbol"))["kind"] == "option",
+        })
+    rows.sort(key=lambda r: (0 if r["term"] == "Short-Term" else 1, r["loss"]))
+    st_loss = sum(r["loss"] for r in rows if r["term"] == "Short-Term")
+    lt_loss = sum(r["loss"] for r in rows if r["term"] == "Long-Term")
+    summary = {
+        "st_loss": st_loss,
+        "lt_loss": lt_loss,
+        "st_lots": sum(1 for r in rows if r["term"] == "Short-Term"),
+        "lt_lots": sum(1 for r in rows if r["term"] == "Long-Term"),
+        "total_loss": st_loss + lt_loss,
+        "est_benefit": abs(st_loss) * st_rate + abs(lt_loss) * lt_rate,
+        "has_options": any(r["is_option"] for r in rows),
+    }
+    return rows, summary

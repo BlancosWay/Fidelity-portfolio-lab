@@ -28,6 +28,7 @@ from common import (  # noqa: F401  (re-exported so portfolio.<name> keeps worki
     MONTHS, parse_money, parse_qty, parse_date, parse_us_date,
     one_year_anniversary, holding_term,
 )
+import tax_tools
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DB = os.path.join(REPO_ROOT, "data", "portfolio.db")
@@ -232,6 +233,30 @@ def accounts_list(db_path):
 
 
 # --------------------------------------------------------------------------- CLI
+def _as_of(val):
+    """Parse a --as-of YYYY-MM-DD (default today)."""
+    return dt.date.fromisoformat(val) if val else dt.date.today()
+
+
+def cmd_harvest(db_path, as_of, st_rate, lt_rate):
+    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate)
+    if not rows:
+        print("No harvestable losses in taxable accounts.")
+        return
+    _print_table(
+        ["Account", "Symbol", "Term", "Qty", "Cost Basis", "Current Value", "Loss $", "Loss %"],
+        [(r["account"], r["symbol"], r["term"], r["quantity"], r["cost_basis_total"],
+          r["current_value"], round(r["loss"], 2), r["loss_pct"]) for r in rows],
+    )
+    print(f"\nHarvestable losses (taxable accounts, as of {as_of}):")
+    print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
+    print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
+    print(f"  Estimated tax benefit (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_benefit']:,.2f}"
+          "  [estimate, not tax advice]")
+    if s["has_options"]:
+        print("  Note: includes option lots -- verify your own tax treatment for options.")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -245,6 +270,10 @@ def main(argv=None):
     sub.add_parser("accounts", help="list accounts")
     qp = sub.add_parser("query", help="run a read-only SELECT over the lots table")
     qp.add_argument("sql")
+    hp = sub.add_parser("harvest", help="tax-loss harvest candidates (taxable accounts, short-term first)")
+    hp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    hp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    hp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -261,6 +290,8 @@ def main(argv=None):
         if rows:
             _print_table(list(rows[0].keys()), [tuple(r) for r in rows])
         print(f"({len(rows)} rows)")
+    elif args.cmd == "harvest":
+        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
     return 0
 
 

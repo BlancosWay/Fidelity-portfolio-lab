@@ -1,4 +1,5 @@
 """Tests for scripts/analyze/tax_tools.py (stdlib unittest). Synthetic data only."""
+import datetime as dt
 import os
 import sys
 import unittest
@@ -81,6 +82,47 @@ class TaxableLossCandidateTests(unittest.TestCase):
         ]
         got = {c["symbol"] for c in tt.taxable_loss_candidates(lots)}
         self.assertEqual(got, {"AAPL", "TSLA"})
+
+
+class HarvestTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_ranking_and_summary(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="LTLOSS", gain_loss=-300.0,
+                date_acquired="2024-01-05", term="Long-Term"),
+            lot(account="Individual - TOD Test", symbol="STBIG", gain_loss=-500.0,
+                date_acquired="2026-02-01", term="Short-Term"),
+            lot(account="Individual - TOD Test", symbol="STSMALL", gain_loss=-50.0,
+                date_acquired="2026-03-01", term="Short-Term"),
+            lot(account="Roth IRA Test", symbol="IGNORED", gain_loss=-999.0,
+                date_acquired="2026-01-01", term="Short-Term"),
+            lot(account="Individual - TOD Test", symbol="GAIN", gain_loss=100.0,
+                date_acquired="2026-01-01", term="Short-Term"),
+        ]
+        rows, s = tt.harvest(lots, self.AS_OF, st_rate=0.30, lt_rate=0.20)
+        # ST first (biggest loss first), then LT; IRA + gain excluded.
+        self.assertEqual([r["symbol"] for r in rows], ["STBIG", "STSMALL", "LTLOSS"])
+        self.assertAlmostEqual(s["st_loss"], -550.0)
+        self.assertAlmostEqual(s["lt_loss"], -300.0)
+        self.assertEqual((s["st_lots"], s["lt_lots"]), (2, 1))
+        self.assertAlmostEqual(s["est_benefit"], 550 * 0.30 + 300 * 0.20)  # positive avoided tax
+        self.assertFalse(s["has_options"])
+
+    def test_term_recomputed_from_date(self):
+        # Stored term is a stale "Short-Term" but acquired > 1yr before as_of -> recomputed Long-Term.
+        lots = [lot(account="Individual - TOD Test", symbol="STALE", gain_loss=-10.0,
+                    date_acquired="2025-01-01", term="Short-Term")]
+        rows, s = tt.harvest(lots, self.AS_OF)
+        self.assertEqual(rows[0]["term"], "Long-Term")
+        self.assertEqual(s["lt_lots"], 1)
+
+    def test_option_flag(self):
+        lots = [lot(account="Individual - TOD Test", symbol="AAL 20 Call", gain_loss=-5.0,
+                    date_acquired="2026-06-01", term="Short-Term")]
+        rows, s = tt.harvest(lots, self.AS_OF)
+        self.assertTrue(rows[0]["is_option"])
+        self.assertTrue(s["has_options"])
 
 
 if __name__ == "__main__":
