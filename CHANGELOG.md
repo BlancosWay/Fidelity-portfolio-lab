@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no manual "Expand groups" click required. A collapsed group is detected **structurally** (an
   "Account:" row with no position rows beneath it), not by the `ag-row-group-contracted` CSS class,
   which Fidelity leaves on rows even when they are expanded.
+- Cash / core money-market balances are now included in the export. Each account's cash row
+  (Fidelity's `posweb-row-core` "Cash … HELD IN MONEY MARKET" row, which has a balance but no tax
+  lots) is written as a value-only CSV row (`Symbol=CASH`, `Current Value` set, date/term/lot fields
+  blank). Detection matches the `posweb-row-core` class plus a "Cash" label, so tickers containing
+  "core" (e.g. CoreWeave/CRWV) are never misread as cash. These rows are excluded from the long/short
+  lot aggregation but count toward each account's market value.
 
 ### Fixed
 - The exporter now captures **all** lots on large accounts (100+ positions). It reads positions
@@ -19,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drawer at once. Opening all drawers made the grid tall enough that Fidelity's AG Grid started
   virtualising (dropping) off-screen drawer rows, so later positions were silently truncated
   mid-way (e.g., a `BrokerageLink` account captured only symbols A–C). One-at-a-time keeps the DOM
-  small so nothing is dropped; each position's expander is re-located by `(account, symbol)` at
-  click time and its lots attributed directly (no reliance on volatile row indices).
+  small so nothing is dropped; each position is addressed by its **ordinal** in the expander list
+  (collision-proof when a symbol appears twice in one account) and its lots are read only from the
+  drawer that newly appeared, so nothing is misattributed.
 - The exporter now parses lots on accounts whose position drawer opens on the **Research** tab. It
   activates each drawer's **"Purchase history"** tab (Fidelity's own in-drawer `<button role="tab">`
   that controls the `posweb-drawer-tabpanel-lots` panel) so `table.posweb-purchase-history` renders
