@@ -99,5 +99,17 @@ class RipeningCliTests(unittest.TestCase):
         self.assertIn("HARVEST BEFORE RIPENING", text)
 
 
+class ConcentrationCliTests(unittest.TestCase):
+    def test_output(self):
+        db = build_db(SAMPLE_ROWS)
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("LOSSA", text)              # all accounts included (cross-account)
+        self.assertIn("Invested (non-cash)", text)
+        self.assertIn("HHI", text)
+
+
 if __name__ == "__main__":
     unittest.main()

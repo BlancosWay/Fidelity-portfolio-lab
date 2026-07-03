@@ -273,6 +273,24 @@ def cmd_ripening(db_path, as_of, within, st_rate, lt_rate):
           f"~${s['total_tax_saved_by_waiting']:,.2f}  [estimate, not tax advice]")
 
 
+def cmd_concentration(db_path, top, threshold):
+    rows, s = tax_tools.concentration(fetch_lots(db_path), top, threshold)
+    if not rows:
+        print(f"No non-cash positions. Cash: ${s['cash_total']:,.2f} (100%).")
+        return
+    _print_table(
+        ["Symbol", "Value", "% Inv", "Cum %", "#Acct", "Flag"],
+        [(r["symbol"], round(r["value"], 2), f"{r['weight'] * 100:.2f}%", f"{r['cumulative'] * 100:.2f}%",
+          r["accounts"], (">%.0f%%" % (threshold * 100)) if r["over_threshold"] else "") for r in rows[:top]],
+    )
+    eff = f"{s['effective_positions']:.1f}" if s["effective_positions"] is not None else "N/A"
+    print(f"\nInvested (non-cash): ${s['invested_total']:,.2f}; cash ${s['cash_total']:,.2f} "
+          f"({s['cash_pct'] * 100:.1f}% of ${s['total']:,.2f} total).")
+    print(f"  {s['num_positions']} positions; HHI={s['hhi']:.4f}; effective positions={eff}.")
+    if s["over_threshold"]:
+        print(f"  Over {threshold * 100:.0f}% single-name concentration: {', '.join(s['over_threshold'])}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -295,6 +313,9 @@ def main(argv=None):
     rp.add_argument("--within", type=int, help="only lots ripening within N days")
     rp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     rp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    cp = sub.add_parser("concentration", help="cross-account concentration & diversification")
+    cp.add_argument("--top", type=int, default=10, help="show the top N positions (default 10)")
+    cp.add_argument("--threshold", type=float, default=0.05, help="single-name concentration flag (default 0.05)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -315,6 +336,8 @@ def main(argv=None):
         cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
     elif args.cmd == "ripening":
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
+    elif args.cmd == "concentration":
+        cmd_concentration(args.db, args.top, args.threshold)
     return 0
 
 

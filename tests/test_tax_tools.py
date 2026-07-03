@@ -180,5 +180,47 @@ class RipeningTests(unittest.TestCase):
         self.assertEqual([r["symbol"] for r in rows], ["ACTUALLY_ST"])
 
 
+class ConcentrationTests(unittest.TestCase):
+    def test_aggregate_and_metrics(self):
+        lots = [
+            lot(account="A", symbol="AAA", current_value=6000.0),
+            lot(account="B", symbol="AAA", current_value=2000.0),   # AAA = 8000 across 2 accounts
+            lot(account="A", symbol="BBB", current_value=2000.0),
+            lot(account="A", symbol="CASH", current_value=1000.0, gain_loss=None),  # cash excluded
+        ]
+        rows, s = tt.concentration(lots, top=10, threshold=0.5)
+        self.assertAlmostEqual(s["invested_total"], 10000.0)
+        self.assertAlmostEqual(s["cash_total"], 1000.0)
+        self.assertEqual([r["symbol"] for r in rows], ["AAA", "BBB"])   # ranked by value
+        aaa = rows[0]
+        self.assertAlmostEqual(aaa["value"], 8000.0)
+        self.assertEqual(aaa["accounts"], 2)
+        self.assertAlmostEqual(aaa["weight"], 0.8)
+        self.assertAlmostEqual(s["hhi"], 0.8 ** 2 + 0.2 ** 2)          # 0.68
+        self.assertAlmostEqual(s["effective_positions"], 1 / 0.68)
+        self.assertEqual(s["over_threshold"], ["AAA"])                  # 0.8 > 0.5
+
+    def test_all_cash_guard(self):
+        rows, s = tt.concentration([lot(account="A", symbol="CASH", current_value=500.0, gain_loss=None)])
+        self.assertEqual(rows, [])
+        self.assertEqual(s["num_positions"], 0)
+        self.assertEqual(s["hhi"], 0.0)
+        self.assertIsNone(s["effective_positions"])
+        self.assertAlmostEqual(s["cash_pct"], 1.0)
+
+    def test_zero_invested_nonzero_symbols_guard(self):
+        # Non-cash symbols exist but sum to zero invested -> still the empty-rankings guard.
+        lots = [
+            lot(account="A", symbol="ZERO1", current_value=0.0),
+            lot(account="A", symbol="ZERO2", current_value=0.0),
+            lot(account="A", symbol="CASH", current_value=300.0, gain_loss=None),
+        ]
+        rows, s = tt.concentration(lots)
+        self.assertEqual(rows, [])
+        self.assertEqual(s["num_positions"], 0)
+        self.assertIsNone(s["effective_positions"])
+        self.assertAlmostEqual(s["cash_pct"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
