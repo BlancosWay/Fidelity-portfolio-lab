@@ -70,8 +70,10 @@ Real data:
 > account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
 > window you export (so `CLEAN` is not a guarantee): for each current taxable loss it flags a
 > same-security purchase in the **prior `--window` days through `--as-of`** in *any* account —
-> **BLOCKED** when that buy is in a tax-advantaged account (permanent disallowance), else **CAUTION** —
-> plus a forward "don't repurchase within N days" reminder and a ±`--window` audit of past sells.
+> **BLOCKED** for an IRA/Roth/HSA buy (permanent disallowance, e.g. Rev. Rul. 2008-5 for IRAs),
+> **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 buy (no IRS guidance; prevailing view is the rule
+> does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
+> within N days" reminder and a ±`--window` audit of past sells.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

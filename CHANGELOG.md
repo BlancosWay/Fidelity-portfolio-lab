@@ -12,8 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `harvest` — tax-loss harvest candidates in taxable accounts, short-term losses first.
   - `washsale <history.csv>` — cross-account wash-sale guardrail using a Fidelity Accounts History
     CSV; for a current taxable loss, a same-security purchase in the prior `--window` days (through
-    `--as-of`) in any account is **BLOCKED** when in a tax-advantaged account (permanent disallowance)
-    else **CAUTION**, plus a forward repurchase warning and a ±window realized-history audit.
+    `--as-of`) in any account is graded by the buying account: **BLOCKED** for an IRA/Roth/HSA
+    (permanent disallowance — Rev. Rul. 2008-5 for IRAs), **REVIEW** for a 401(k)/403(b)/BrokerageLink/529
+    (no IRS wash-sale guidance; prevailing view is the rule does not apply), else **CAUTION** for
+    another taxable account, plus a forward repurchase warning and a ±window realized-history audit.
     `--same-underlying` relates a stock loss to option buy-to-open on the same underlying.
   - `sell <SYM> <SHARES>` — specific-ID/HIFO lot selector (`hifo`/`fifo`/`loss-first`/`min-tax`) with
     the realized gain split ST/LT and the delta vs FIFO.

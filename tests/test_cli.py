@@ -161,6 +161,23 @@ class WashSaleCliTests(unittest.TestCase):
         self.assertIn("AAA", text)
         self.assertIn("not tax advice", text)
 
+    def test_review_output_brokeragelink(self):
+        # A replacement buy in a 401(k)/BrokerageLink has no IRS wash-sale guidance -> REVIEW, not BLOCKED.
+        db = build_db([
+            _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),
+        ])
+        hp = build_history([
+            '06-20-2026,BrokerageLink Test,333,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-22-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, False)
+        finally:
+            os.unlink(db)
+            os.unlink(hp)
+        self.assertRegex(text, r"REVIEW[^\n]*: 1")    # counted as REVIEW
+        self.assertRegex(text, r"BLOCKED[^\n]*: 0")   # NOT blocked
+        self.assertIn("AAA", text)
+
     def test_option_buy_to_open_same_underlying(self):
         db = build_db([
             _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),
