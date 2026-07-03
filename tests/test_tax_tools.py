@@ -285,6 +285,17 @@ class SelectLotsTests(unittest.TestCase):
         picks, _ = tt.select_lots(lots, "XYZ", 30, "fifo", as_of=self.AS_OF)
         self.assertEqual(len(picks), 3)  # zero-qty lot skipped (safe_per_share -> None)
 
+    def test_option_uses_total_basis_not_per_share_avg(self):
+        # Option lot: qty 2 contracts, current_value 1600, cost_basis_total 2500, avg_cost_basis 12.50
+        # (premium per underlying share). Selling 1 contract realizes (1600-2500)/2 = -450, NOT the
+        # +787.50 you'd get by mixing per-contract proceeds with per-share cost.
+        lots = [lot(account="Individual - TOD Test", symbol="AAA 20 Call", quantity=2,
+                    current_value=1600.0, cost_basis_total=2500.0, avg_cost_basis=12.50,
+                    gain_loss=-900.0, date_acquired="2026-06-01", term="Short-Term")]
+        picks, s = tt.select_lots(lots, "AAA 20 Call", 1, "fifo", as_of=self.AS_OF)
+        self.assertAlmostEqual(picks[0]["realized_gain"], -450.0)
+        self.assertAlmostEqual(s["realized_gain"], -450.0)
+
 
 class WashSaleTests(unittest.TestCase):
     AS_OF = dt.date(2026, 7, 1)

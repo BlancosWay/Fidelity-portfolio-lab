@@ -255,18 +255,22 @@ def concentration(lots, top=10, threshold=0.05):
 
 
 def _per_share_cost(lot):
-    """Cost basis per share: prefer the per-share Average Cost Basis; else Cost Basis Total/quantity."""
-    a = lot.get("avg_cost_basis")
-    try:
-        a = float(a)
-        if a > 0:
-            return a
-    except (TypeError, ValueError):
-        pass
+    """Cost basis per quantity-unit, kept CONSISTENT with ``safe_per_share`` (current_value/quantity).
+
+    Prefers ``Cost Basis Total / quantity`` so OPTION lots compute correctly: Fidelity's per-share
+    ``Average Cost Basis`` is the premium per underlying share (not per contract), which would mismatch
+    the per-contract proceeds from current_value/quantity. Falls back to ``avg_cost_basis`` only when
+    the total is unavailable."""
     try:
         q, c = float(lot.get("quantity")), float(lot.get("cost_basis_total"))
         if q > 0:
             return c / q
+    except (TypeError, ValueError):
+        pass
+    try:
+        a = float(lot.get("avg_cost_basis"))
+        if a > 0:
+            return a
     except (TypeError, ValueError):
         pass
     return None
