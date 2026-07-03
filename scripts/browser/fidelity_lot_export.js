@@ -17,7 +17,8 @@
  * allow pasting. Paste this whole file. It auto-expands any collapsed account groups, then reads
  * each position's lots ONE AT A TIME (expand -> read -> collapse, so the grid never grows large
  * enough for Fidelity to drop off-screen rows), prints summaries, and downloads fidelity_lots.csv.
- * A large account (100+ positions) can take several minutes -- watch the console progress.
+ * Each account's cash/core money-market balance is added as a value-only row (Symbol=CASH; blank
+ * date/term/lot fields). A large account (100+ positions) can take several minutes -- watch progress.
  */
 (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -120,18 +121,27 @@
     }
     return out;
   };
-  const queue = [];
+  const queue = [], cashRows = [];
   let curAcct = '';
-  pinnedRowsNow().forEach(({ r }) => {
+  const curValAt = ri => { const c = document.querySelector('.ag-center-cols-container [role="row"][row-index="' + ri + '"] [col-id="curVal"]'); return c ? clean(c.textContent) : ''; };
+  pinnedRowsNow().forEach(({ r, ri }) => {
     if (r.classList.contains('posweb-row-account')) { curAcct = acctOf(r.querySelector('[col-id="sym"]')) || curAcct; return; }
     if (!r.classList.contains('posweb-row-position')) return;
     const cell = r.querySelector('[col-id="sym"]'); if (!cell) return;
+    // Cash / core money-market rows (class posweb-row-core, label starting "Cash") have no lot drawer;
+    // capture the balance from the center "Current value" (curVal) cell as a value-only row. Match on
+    // the class + "Cash" text -- never a bare "core" substring, which would false-match e.g. CoreWeave.
+    if (r.classList.contains('posweb-row-core')) {
+      const label = clean(cell.textContent);
+      if (/\bcash\b/i.test(label)) cashRows.push({ account: curAcct, desc: label, value: curValAt(ri) });
+      return;
+    }
     const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
-    if (!isExpander(nameBtn)) return; // cash / non-expandable
+    if (!isExpander(nameBtn)) return; // other non-expandable rows
     queue.push({ account: curAcct, symbol: symOf(nameBtn), desc: txt(cell, '.posweb-cell-symbol-description'), sub: txt(cell, '.posweb-cell-a11y_indicator') });
   });
   const expanderCount = document.querySelectorAll(EXP).length;
-  if (!queue.length && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
+  if (!queue.length && !cashRows.length && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
   console.log(`Reading ${queue.length} positions (${expanderCount} collapsed expanders) ONE at a time -- keeps the grid small so nothing is dropped; a large account can take several minutes...`);
 
   const H = heads => { const f = re => heads.findIndex(h => re.test(h.toLowerCase())); return { acq: f(/acquired/), term: f(/term/), qty: f(/quantity/), val: f(/current value/), avg: f(/average cost/), cost: f(/cost basis total/), gl: heads.findIndex(h => /gain\/loss/i.test(h) && h.includes('$')), glp: heads.findIndex(h => /gain\/loss/i.test(h) && h.includes('%')) }; };
@@ -182,7 +192,7 @@
   collapseOpen(); // safety net: collapse anything still open
   if (missed) console.warn(`${missed} position(s) returned no purchase-history rows; if a symbol looks short, re-run.`);
 
-  if (!lots.length) { console.warn('Parsed 0 lots. Ensure positions are listed and re-run; if still empty, use fidelity_dom_inspector.js.'); return; }
+  if (!lots.length && !cashRows.length) { console.warn('Parsed 0 lots. Ensure positions are listed and re-run; if still empty, use fidelity_dom_inspector.js.'); return; }
 
   const bySym = {}, byAcct = {};
   lots.forEach(l => {
@@ -197,9 +207,18 @@
   console.log('Units per symbol (long = >1yr, short = <=1yr):'); console.table(symTable);
   console.log('Lot counts per account by term:'); console.table(byAcct);
 
+  // Cash / core money-market balances: value-only rows (Symbol=CASH), excluded from the lot term
+  // aggregation above so they never distort long/short counts.
+  const cashLots = cashRows.map(c => ({ account: c.account, symbol: 'CASH', description: c.desc, type: '', quantity: '', acquired: '', termComputed: '', termFidelity: '', avgCost: '', costTotal: '', value: c.value, gl: '', glp: '' }));
+  if (cashRows.length) {
+    const cashByAcct = {}; cashRows.forEach(c => { const k = c.account || '(unknown)'; cashByAcct[k] = +((cashByAcct[k] || 0) + num(c.value)).toFixed(2); });
+    console.log(`Cash / core positions: ${cashRows.length} (total $${cashRows.reduce((s, c) => s + num(c.value), 0).toFixed(2)}); added to the CSV as value-only rows (Symbol=CASH).`);
+    console.table(cashByAcct);
+  }
+
   const cols = ['Account', 'Symbol', 'Description', 'Margin/Cash', 'Quantity', 'Date Acquired', 'Term (>1yr rule)', 'Term (Fidelity)', 'Average Cost Basis', 'Cost Basis Total', 'Current Value', 'Gain/Loss $', 'Gain/Loss %'];
   const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-  const rows = lots.map(l => [l.account, l.symbol, l.description, l.type, l.quantity, l.acquired, l.termComputed, l.termFidelity, l.avgCost, l.costTotal, l.value, l.gl, l.glp].map(esc).join(','));
+  const rows = lots.concat(cashLots).map(l => [l.account, l.symbol, l.description, l.type, l.quantity, l.acquired, l.termComputed, l.termFidelity, l.avgCost, l.costTotal, l.value, l.gl, l.glp].map(esc).join(','));
   const csv = [cols.join(','), ...rows].join('\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
