@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which Fidelity leaves on rows even when they are expanded.
 
 ### Fixed
+- The exporter now captures **all** lots on large accounts (100+ positions). It reads positions
+  **one at a time** (expand → read that drawer's lot table → collapse) instead of opening every
+  drawer at once. Opening all drawers made the grid tall enough that Fidelity's AG Grid started
+  virtualising (dropping) off-screen drawer rows, so later positions were silently truncated
+  mid-way (e.g., a `BrokerageLink` account captured only symbols A–C). One-at-a-time keeps the DOM
+  small so nothing is dropped; each position's expander is re-located by `(account, symbol)` at
+  click time and its lots attributed directly (no reliance on volatile row indices).
 - The exporter now parses lots on accounts whose position drawer opens on the **Research** tab. It
   activates each drawer's **"Purchase history"** tab (Fidelity's own in-drawer `<button role="tab">`
   that controls the `posweb-drawer-tabpanel-lots` panel) so `table.posweb-purchase-history` renders
