@@ -359,6 +359,96 @@ class WashSaleTests(unittest.TestCase):
         # writing the option (sell-to-open) is not an acquisition -> CLEAN even with the flag
         self.assertEqual(tt.washsale(c, sto, self.AS_OF, 30, same_underlying=True)["candidates"][0]["status"], "CLEAN")
 
+    def test_brokeragelink_401k_buy_is_review_not_blocked(self):
+        # BUG REPRO: a replacement buy in a 401(k)/BrokerageLink has NO IRS wash-sale guidance and the
+        # prevailing view is the rule does NOT apply -> status should be REVIEW, not BLOCKED. The current
+        # code keys off is_taxable (any tax-advantaged account) and returns BLOCKED, which over-flags it.
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "BrokerageLink Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "REVIEW")
+
+    def test_hsa_buy_blocked(self):
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Health Savings Account Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "BLOCKED")
+
+    def test_529_buy_review(self):
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Education 529 Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "REVIEW")
+
+    def test_trigger_records_category_and_severity(self):
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "BrokerageLink Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        trig = res["candidates"][0]["triggers"][0]
+        self.assertEqual(trig["category"], "employer")
+        self.assertEqual(trig["severity"], "REVIEW")
+
+    def test_precedence_ira_plus_employer_is_blocked(self):
+        # worst severity among triggers wins: BLOCKED (ira) > REVIEW (employer)
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Roth IRA Test", "AAA", "BUY"),
+                           hrec(dt.date(2026, 6, 21), "BrokerageLink Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "BLOCKED")
+
+    def test_precedence_taxable_plus_employer_is_caution(self):
+        # CAUTION (taxable) > REVIEW (employer)
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA", "BUY"),
+                           hrec(dt.date(2026, 6, 21), "BrokerageLink Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "CAUTION")
+
+    def test_summary_counts_review(self):
+        res = tt.washsale(
+            [self.cand("AAA"), self.cand("BBB"), self.cand("CCC"), self.cand("DDD")],
+            [hrec(dt.date(2026, 6, 20), "Roth IRA Test", "AAA", "BUY"),          # BLOCKED
+             hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "BBB", "BUY"),  # CAUTION
+             hrec(dt.date(2026, 6, 20), "BrokerageLink Test", "CCC", "BUY")],    # REVIEW; DDD -> CLEAN
+            self.AS_OF, window=30)
+        s = res["summary"]
+        self.assertEqual((s["blocked"], s["caution"], s["review"], s["clean"]), (1, 1, 1, 1))
+
+
+class WashCategoryTests(unittest.TestCase):
+    def test_each_category(self):
+        cases = {
+            "Roth IRA Test": "ira",
+            "Traditional IRA Test": "ira",
+            "Rollover IRA 123": "ira",
+            "Health Savings Account Test": "hsa",
+            "My HSA Test": "hsa",
+            "BrokerageLink Test": "employer",
+            "My 401k Test": "employer",
+            "401(k) Plan": "employer",
+            "403(b) Test": "employer",
+            "Education 529 Test": "529",
+            "Individual - TOD Test": "taxable",
+            "Joint Brokerage Test": "taxable",
+            "": "taxable",
+        }
+        for account, expected in cases.items():
+            self.assertEqual(tt.wash_category(account), expected, account)
+
+    def test_employer_matched_before_ira(self):
+        # A Roth/Traditional prefix on an employer plan must NOT fall through to the IRA bucket
+        # (that would re-block the reported bug's common variant).
+        self.assertEqual(tt.wash_category("Roth IRA Test"), "ira")
+        self.assertEqual(tt.wash_category("Roth 401(k) Test"), "employer")
+        self.assertEqual(tt.wash_category("BrokerageLink Roth 401(k) Test"), "employer")
+
+    def test_severity_map(self):
+        self.assertEqual(tt.WASH_SEVERITY["ira"], "BLOCKED")
+        self.assertEqual(tt.WASH_SEVERITY["hsa"], "BLOCKED")
+        self.assertEqual(tt.WASH_SEVERITY["employer"], "REVIEW")
+        self.assertEqual(tt.WASH_SEVERITY["529"], "REVIEW")
+        self.assertEqual(tt.WASH_SEVERITY["taxable"], "CAUTION")
+
 
 if __name__ == "__main__":
     unittest.main()
