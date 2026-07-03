@@ -33,6 +33,46 @@ def is_taxable(account):
     return _TAX_ADVANTAGED.search(account) is None
 
 
+# --- Wash-sale severity classification -------------------------------------------------------------
+# Unlike is_taxable's binary split, wash-sale certainty varies by the *type* of tax-advantaged account.
+# Employer plans are matched BEFORE IRA/Roth so a "Roth 401(k)" / "BrokerageLink Roth 401(k)" is not
+# mis-read as an IRA via the bare word "roth".
+_WASH_EMPLOYER = re.compile(r"brokeragelink|brokerage\s+link|401\s*\(?k\)?|403\s*\(?b\)?", re.IGNORECASE)
+_WASH_IRA = re.compile(r"\bira\b|\broth\b", re.IGNORECASE)
+_WASH_HSA = re.compile(r"\bhsa\b|health\s+savings", re.IGNORECASE)
+_WASH_529 = re.compile(r"529", re.IGNORECASE)
+
+# Severity of a replacement buy landing in each account category (informational, not tax advice):
+#   ira/hsa  -> BLOCKED : IRA/Roth loss is permanently disallowed (Rev. Rul. 2008-5); HSA is treated
+#                         conservatively the same (individual account, no explicit ruling).
+#   employer -> REVIEW  : 401(k)/403(b)/BrokerageLink have no IRS wash-sale guidance; prevailing view
+#   529      -> REVIEW    is the rule does NOT apply -> softer REVIEW, not BLOCKED.
+#   taxable  -> CAUTION : an ordinary wash sale (loss deferred into the replacement lot).
+WASH_SEVERITY = {"ira": "BLOCKED", "hsa": "BLOCKED", "employer": "REVIEW", "529": "REVIEW",
+                 "taxable": "CAUTION"}
+
+# Precedence for combining multiple triggers: a candidate's status is the worst severity among them.
+_STATUS_RANK = {"CLEAN": 0, "REVIEW": 1, "CAUTION": 2, "BLOCKED": 3}
+
+
+def wash_category(account):
+    """Classify an account for WASH-SALE severity: 'employer' | 'ira' | 'hsa' | '529' | 'taxable'.
+
+    Employer plans (401(k)/403(b)/BrokerageLink) are matched first so their common Roth/Traditional
+    prefixes don't fall through to the IRA bucket. An empty/unknown name is 'taxable' (the same
+    conservative default as ``is_taxable``)."""
+    a = account or ""
+    if _WASH_EMPLOYER.search(a):
+        return "employer"
+    if _WASH_IRA.search(a):
+        return "ira"
+    if _WASH_HSA.search(a):
+        return "hsa"
+    if _WASH_529.search(a):
+        return "529"
+    return "taxable"
+
+
 def is_cash(lot):
     """True for the value-only cash/core rows (Symbol=CASH) the exporter emits."""
     return (lot.get("symbol") or "").strip().upper() == "CASH"
@@ -383,9 +423,11 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
     """Cross-account wash-sale guardrail.
 
     (a) HARVEST-NOW guard: for each taxable loss candidate, look for an observed BUY/REINVEST of the
-        same security in [as_of - window, as_of] in ANY account. A match -> BLOCKED when that buy is in
-        a tax-advantaged account (the loss is permanently disallowed), else CAUTION. (The forward
-        [as_of+1, as_of+window] window is a behavioral warning surfaced by the CLI.)
+        same security in [as_of - window, as_of] in ANY account. A match's severity depends on the
+        buying account's ``wash_category``: IRA/Roth/HSA -> BLOCKED (loss disallowed), 401(k)/403(b)/
+        BrokerageLink/529 -> REVIEW (unsettled, prevailing view is the rule does not apply), another
+        taxable account -> CAUTION. The candidate's status is the worst severity among its triggers.
+        (The forward [as_of+1, as_of+window] window is a behavioral warning surfaced by the CLI.)
     (b) REALIZED-history audit: a past SELL is flagged for REVIEW when a same-security BUY/REINVEST
         exists within +/-window days. Whether the sale was at a loss is NOT derivable from history
         alone, so it is labeled "loss unknown" rather than asserted as a wash sale.
@@ -402,18 +444,17 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
     cand_rows = []
     for lot in loss_candidates:
         sk = security_key(lot.get("symbol"))
-        triggers = [
-            {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
-             "qty": b["abs_qty"], "tax_advantaged": not is_taxable(b["account"])}
-            for b in buys
-            if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying)
-        ]
+        triggers = []
+        for b in buys:
+            if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying):
+                category = wash_category(b["account"])
+                triggers.append(
+                    {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
+                     "qty": b["abs_qty"], "category": category, "severity": WASH_SEVERITY[category]})
         if not triggers:
             status = "CLEAN"
-        elif any(t["tax_advantaged"] for t in triggers):
-            status = "BLOCKED"
         else:
-            status = "CAUTION"
+            status = max((t["severity"] for t in triggers), key=lambda s: _STATUS_RANK[s])
         cand_rows.append({"symbol": lot.get("symbol"), "account": lot.get("account"),
                           "loss": lot.get("gain_loss"), "status": status, "triggers": triggers})
 
@@ -436,6 +477,7 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
         "window": window,
         "blocked": sum(1 for c in cand_rows if c["status"] == "BLOCKED"),
         "caution": sum(1 for c in cand_rows if c["status"] == "CAUTION"),
+        "review": sum(1 for c in cand_rows if c["status"] == "REVIEW"),
         "clean": sum(1 for c in cand_rows if c["status"] == "CLEAN"),
         "realized_review": len(realized),
         "history_start": min((h["date"] for h in history), default=None),

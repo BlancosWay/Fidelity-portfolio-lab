@@ -325,8 +325,9 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     else:
         print("No taxable loss candidates to check.")
     print(f"\nWash-sale check (as of {as_of}, +/-{window}-day window):")
-    print(f"  BLOCKED (replacement buy in a tax-advantaged account -> loss permanently disallowed): {s['blocked']}")
+    print(f"  BLOCKED (replacement buy in an IRA/Roth/HSA -> loss permanently disallowed, e.g. Rev. Rul. 2008-5 for IRAs): {s['blocked']}")
     print(f"  CAUTION (replacement buy in a taxable account): {s['caution']}")
+    print(f"  REVIEW  (replacement buy in a 401(k)/403(b)/BrokerageLink/529 -> wash-sale treatment unsettled; prevailing view is it does NOT apply, confirm with a tax pro): {s['review']}")
     print(f"  CLEAN: {s['clean']}")
     print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")
     if res["realized"]:

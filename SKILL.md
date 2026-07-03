@@ -81,10 +81,12 @@ python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same
   instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
 - **`washsale HISTORY.csv`** — needs a Fidelity **Accounts History** CSV export. For each current
   taxable loss it flags a same-security purchase in the **prior `--window` days (through `--as-of`)**
-  in *any* account: **BLOCKED** if that buy is in a tax-advantaged account (the loss is permanently
-  disallowed), else **CAUTION**; it also prints a forward "don't repurchase within N days" reminder and
-  a ±`--window` audit of past sells. Limitation: it only sees the history window you export, so `CLEAN`
-  is not a guarantee.
+  in *any* account, graded by the buying account: **BLOCKED** for an IRA/Roth/HSA (loss permanently
+  disallowed — Rev. Rul. 2008-5 for IRAs), **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 (no IRS
+  wash-sale guidance; prevailing view is the rule does **not** apply — confirm with a tax pro), else
+  **CAUTION** for another taxable account; it also prints a forward "don't repurchase within N days"
+  reminder and a ±`--window` audit of past sells. Limitation: it only sees the history window you
+  export, so `CLEAN` is not a guarantee.
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed
