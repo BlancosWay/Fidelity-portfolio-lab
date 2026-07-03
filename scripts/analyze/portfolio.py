@@ -24,11 +24,15 @@ import sqlite3
 import sys
 from urllib.request import pathname2url
 
+from common import (  # noqa: F401  (re-exported so portfolio.<name> keeps working)
+    MONTHS, parse_money, parse_qty, parse_date, parse_us_date,
+    one_year_anniversary, holding_term,
+)
+import tax_tools
+import history
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DB = os.path.join(REPO_ROOT, "data", "portfolio.db")
-
-MONTHS = {m: i for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 
 # Exact export schema shared with scripts/browser/fidelity_lot_export.js.
 EXPECTED_HEADERS = [
@@ -55,62 +59,10 @@ COLUMNS = [
 
 
 # --------------------------------------------------------------------------- parsing
-def parse_money(s):
-    """Parse '$1,425.00', '+64.40%', '-$900.00', '($5.00)' -> float (or None)."""
-    if s is None:
-        return None
-    s = s.strip()
-    if not s:
-        return None
-    neg = s.startswith("(") and s.endswith(")")
-    s = s.replace("(", "").replace(")", "").replace("$", "").replace(",", "").replace("+", "").replace("%", "").strip()
-    if s in ("", "-", "--"):
-        return None
-    try:
-        v = float(s)
-    except ValueError:
-        return None
-    return -v if neg else v
+# parse_money / parse_qty / parse_date / parse_us_date / one_year_anniversary / holding_term / MONTHS
+# now live in common.py and are re-imported above (kept as portfolio.<name> for backward compat).
 
 
-def parse_qty(s):
-    if s is None:
-        return 0.0
-    try:
-        return float(s.replace(",", "").strip())
-    except ValueError:
-        return 0.0
-
-
-def parse_date(s):
-    """Parse 'Mmm-DD-YYYY' (e.g. Mar-11-2026); also tolerate YYYY-MM-DD and MM/DD/YYYY."""
-    if not s:
-        return None
-    s = s.strip()
-    m = re.match(r"^([A-Za-z]{3})[-\s](\d{1,2})[-,\s]+(\d{4})$", s)
-    if m and m.group(1).lower() in MONTHS:
-        return dt.date(int(m.group(3)), MONTHS[m.group(1).lower()], int(m.group(2)))
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return dt.datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def one_year_anniversary(d):
-    """One-year calendar anniversary; a Feb-29 date clamps to Feb-28 of the next year."""
-    try:
-        return d.replace(year=d.year + 1)
-    except ValueError:  # Feb-29 -> the next year has no Feb-29
-        return dt.date(d.year + 1, 2, 28)
-
-
-def holding_term(acquired, as_of):
-    """Long-Term iff as_of is strictly after the one-year anniversary; else Short-Term."""
-    if acquired is None:
-        return None
-    return "Long-Term" if as_of > one_year_anniversary(acquired) else "Short-Term"
 
 
 # --------------------------------------------------------------------------- db helpers
@@ -131,6 +83,19 @@ def readonly_connection(db_path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=ON")
     return conn
+
+
+def fetch_lots(db_path=DEFAULT_DB):
+    """Read every lot row as a list of plain dicts via a strictly read-only connection.
+
+    The analysis subcommands (harvest/washsale/sell/ripening/concentration) call this; only ``load``
+    ever writes. Returns dicts keyed by the ``lots`` table columns (account, symbol, quantity,
+    date_acquired, term, cost_basis_total, current_value, gain_loss, ...)."""
+    conn = readonly_connection(db_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM lots").fetchall()]
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------------------------------- load
@@ -269,6 +234,114 @@ def accounts_list(db_path):
 
 
 # --------------------------------------------------------------------------- CLI
+def _as_of(val):
+    """Parse a --as-of YYYY-MM-DD (default today)."""
+    return dt.date.fromisoformat(val) if val else dt.date.today()
+
+
+def cmd_harvest(db_path, as_of, st_rate, lt_rate):
+    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate)
+    if not rows:
+        print("No harvestable losses in taxable accounts.")
+        return
+    _print_table(
+        ["Account", "Symbol", "Term", "Qty", "Cost Basis", "Current Value", "Loss $", "Loss %"],
+        [(r["account"], r["symbol"], r["term"], r["quantity"], r["cost_basis_total"],
+          r["current_value"], round(r["loss"], 2), r["loss_pct"]) for r in rows],
+    )
+    print(f"\nHarvestable losses (taxable accounts, as of {as_of}):")
+    print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
+    print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
+    print(f"  Estimated tax benefit (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_benefit']:,.2f}"
+          "  [estimate, not tax advice]")
+    if s["has_options"]:
+        print("  Note: includes option lots -- verify your own tax treatment for options.")
+
+
+def cmd_ripening(db_path, as_of, within, st_rate, lt_rate):
+    rows, s = tax_tools.ripening(fetch_lots(db_path), as_of, st_rate, lt_rate, within)
+    if not rows:
+        print("No taxable short-term lots ripening" + (f" within {within} days." if within else "."))
+        return
+    _print_table(
+        ["Account", "Symbol", "Acquired", "Ripens", "Days", "G/L $", "Hint"],
+        [(r["account"], r["symbol"], r["acquired"], r["ripens_on"], r["days_until"],
+          round(r["gain_loss"], 2), r["hint"]) for r in rows],
+    )
+    print(f"\nRipening (taxable short-term lots, as of {as_of}): {s['count']} lots "
+          f"({s['winners']} winners, {s['losers']} losers).")
+    print(f"  Est. tax saved by waiting for long-term on winners (ST@{st_rate:.0%} vs LT@{lt_rate:.0%}): "
+          f"~${s['total_tax_saved_by_waiting']:,.2f}  [estimate, not tax advice]")
+
+
+def cmd_concentration(db_path, top, threshold):
+    rows, s = tax_tools.concentration(fetch_lots(db_path), top, threshold)
+    if not rows:
+        print(f"No non-cash positions. Cash: ${s['cash_total']:,.2f} (100%).")
+        return
+    _print_table(
+        ["Symbol", "Value", "% Inv", "Cum %", "#Acct", "Flag"],
+        [(r["symbol"], round(r["value"], 2), f"{r['weight'] * 100:.2f}%", f"{r['cumulative'] * 100:.2f}%",
+          r["accounts"], (">%.0f%%" % (threshold * 100)) if r["over_threshold"] else "") for r in rows[:top]],
+    )
+    eff = f"{s['effective_positions']:.1f}" if s["effective_positions"] is not None else "N/A"
+    print(f"\nInvested (non-cash): ${s['invested_total']:,.2f}; cash ${s['cash_total']:,.2f} "
+          f"({s['cash_pct'] * 100:.1f}% of ${s['total']:,.2f} total).")
+    print(f"  {s['num_positions']} positions; HHI={s['hhi']:.4f}; effective positions={eff}.")
+    if s["over_threshold"]:
+        print(f"  Over {threshold * 100:.0f}% single-name concentration: {', '.join(s['over_threshold'])}")
+
+
+def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
+    picks, s = tax_tools.select_lots(fetch_lots(db_path), symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    if not picks:
+        print(f"No sellable lots found for {s['symbol']}" + (f" in accounts matching '{account}'." if account else "."))
+        return
+    _print_table(
+        ["Account", "Acquired", "Term", "Qty", "Basis", "Est Proceeds", "Realized G/L"],
+        [(p["account"], p["acquired"], p["term"], round(p["qty_used"], 4), round(p["basis"], 2),
+          round(p["proceeds"], 2), round(p["realized_gain"], 2)) for p in picks],
+    )
+    print(f"\n{s['strategy']} sale of {s['filled_shares']:g}/{s['requested_shares']:g} sh {s['symbol']} (as of {as_of}):")
+    if s["insufficient"]:
+        print(f"  WARNING: only {s['available_shares']:g} shares available; short by "
+              f"{s['requested_shares'] - s['filled_shares']:g}.")
+    print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
+    print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
+    print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
+
+
+def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
+    candidates = tax_tools.taxable_loss_candidates(fetch_lots(db_path))
+    res = tax_tools.washsale(candidates, history.load_history(history_path), as_of, window, same_underlying)
+    c, s = res["candidates"], res["summary"]
+    if c:
+        _print_table(
+            ["Account", "Symbol", "Loss $", "Status", "Triggering purchases (any account)"],
+            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "", r["status"],
+              "; ".join(f"{t['action']} {t['qty']:g} in {t['account']} {t['date']}" for t in r["triggers"]) or "-")
+             for r in c],
+        )
+    else:
+        print("No taxable loss candidates to check.")
+    print(f"\nWash-sale check (as of {as_of}, +/-{window}-day window):")
+    print(f"  BLOCKED (replacement buy in a tax-advantaged account -> loss permanently disallowed): {s['blocked']}")
+    print(f"  CAUTION (replacement buy in a taxable account): {s['caution']}")
+    print(f"  CLEAN: {s['clean']}")
+    print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")
+    if res["realized"]:
+        print(f"\n  Realized-history review -- {len(res['realized'])} past sale(s) had a same-security "
+              "purchase nearby (confirm whether the sale was at a loss):")
+        for r in res["realized"]:
+            buys = "; ".join(f"{m['action']} {m['qty']:g} in {m['account']} {m['date']}" for m in r["matches"])
+            print(f"    {r['symbol']} sold {r['date']} in {r['account']}: {buys}")
+    hs, he = s["history_start"], s["history_end"]
+    if hs and he:
+        print(f"\n  NOTE: history covers {hs.isoformat()}..{he.isoformat()}; purchases/reinvestments before "
+              "that window are invisible, so CLEAN is not a guarantee.")
+    print("  [informational, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -282,6 +355,32 @@ def main(argv=None):
     sub.add_parser("accounts", help="list accounts")
     qp = sub.add_parser("query", help="run a read-only SELECT over the lots table")
     qp.add_argument("sql")
+    hp = sub.add_parser("harvest", help="tax-loss harvest candidates (taxable accounts, short-term first)")
+    hp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    hp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    hp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
+    rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    rp.add_argument("--within", type=int, help="only lots ripening within N days")
+    rp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    rp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    cp = sub.add_parser("concentration", help="cross-account concentration & diversification")
+    cp.add_argument("--top", type=int, default=10, help="show the top N positions (default 10)")
+    cp.add_argument("--threshold", type=float, default=0.05, help="single-name concentration flag (default 0.05)")
+    slp = sub.add_parser("sell", help="pick which lots to sell (specific-ID/HIFO) to minimize tax")
+    slp.add_argument("symbol")
+    slp.add_argument("shares", type=float)
+    slp.add_argument("--account", help="restrict to accounts matching this text")
+    slp.add_argument("--strategy", choices=["hifo", "fifo", "loss-first", "min-tax"], default="min-tax")
+    slp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    slp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    slp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    wp = sub.add_parser("washsale", help="cross-account wash-sale guardrail (needs a Fidelity history CSV)")
+    wp.add_argument("history", help="path to an Accounts_History.csv")
+    wp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    wp.add_argument("--window", type=int, default=30, help="wash-sale window in days (default 30)")
+    wp.add_argument("--same-underlying", action="store_true",
+                    help="also match a stock loss against options on the same underlying (and vice versa)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -298,6 +397,17 @@ def main(argv=None):
         if rows:
             _print_table(list(rows[0].keys()), [tuple(r) for r in rows])
         print(f"({len(rows)} rows)")
+    elif args.cmd == "harvest":
+        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
+    elif args.cmd == "ripening":
+        cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
+    elif args.cmd == "concentration":
+        cmd_concentration(args.db, args.top, args.threshold)
+    elif args.cmd == "sell":
+        cmd_sell(args.db, args.symbol, args.shares, args.account, args.strategy,
+                 _as_of(args.as_of), args.st_rate, args.lt_rate)
+    elif args.cmd == "washsale":
+        cmd_washsale(args.db, args.history, _as_of(args.as_of), args.window, args.same_underlying)
     return 0
 
 

@@ -53,9 +53,25 @@ Real data:
 | `symbol <SYM>` | Per-lot detail + totals for one symbol. |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
+| `harvest [--as-of D] [--st-rate R] [--lt-rate R]` | Tax-loss harvest candidates (taxable accounts, short-term first). |
+| `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
+| `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
+| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`). |
+| `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
-> e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`.
+> e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
+> (default today) applies to `harvest`/`ripening`/`sell`/`washsale`; `--st-rate`/`--lt-rate` (defaults
+> `0.32`/`0.15`) tune the labeled estimates on `harvest`/`ripening`/`sell`.
+>
+> The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
+> `harvest`/`ripening` cover taxable accounts only — any account whose name matches
+> IRA/Roth/HSA/BrokerageLink/401k/403b/529 is treated as tax-advantaged and excluded, and every other
+> account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
+> window you export (so `CLEAN` is not a guarantee): for each current taxable loss it flags a
+> same-security purchase in the **prior `--window` days through `--as-of`** in *any* account —
+> **BLOCKED** when that buy is in a tax-advantaged account (permanent disallowance), else **CAUTION** —
+> plus a forward "don't repurchase within N days" reminder and a ±`--window` audit of past sells.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

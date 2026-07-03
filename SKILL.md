@@ -61,6 +61,31 @@ Use **`query`** for any ad-hoc question the user asks — it is **read-only** (o
 `mode=ro` + `PRAGMA query_only`, accepts a single `SELECT`/`WITH` statement only). Translate the
 user's question into SQL over the `lots` table.
 
+### 4. Tax / portfolio tools (Tier-1)
+All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
+(default `0.32`) and `--lt-rate` (default `0.15`) only affect the labeled estimates.
+```
+python scripts/analyze/portfolio.py harvest                       # tax-loss harvest candidates (taxable accounts, short-term first)
+python scripts/analyze/portfolio.py ripening --within 60          # short-term lots about to become long-term
+python scripts/analyze/portfolio.py concentration --top 15        # cross-account concentration + HHI
+python scripts/analyze/portfolio.py sell AAPL 50 --strategy min-tax   # which specific lots to sell (hifo|fifo|loss-first|min-tax)
+python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same-underlying
+```
+- **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
+  cash; ranks short-term losses first (they offset ordinary income).
+- **`ripening`** — taxable short-term lots and the exact date each becomes long-term; flags short-term
+  *losers* to harvest before they ripen.
+- **`concentration`** — aggregates value by symbol across all accounts (cash reported separately);
+  Herfindahl index + single-name flags (`--threshold`, default `0.05`).
+- **`sell SYMBOL SHARES`** — picks the specific lots to sell to minimize tax and prints the specific-ID
+  instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
+- **`washsale HISTORY.csv`** — needs a Fidelity **Accounts History** CSV export. For each current
+  taxable loss it flags a same-security purchase in the **prior `--window` days (through `--as-of`)**
+  in *any* account: **BLOCKED** if that buy is in a tax-advantaged account (the loss is permanently
+  disallowed), else **CAUTION**; it also prints a forward "don't repurchase within N days" reminder and
+  a ±`--window` audit of past sells. Limitation: it only sees the history window you export, so `CLEAN`
+  is not a guarantee.
+
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed
   from each lot's acquisition date; **exactly one year = short**. A Feb-29 acquisition uses Feb-28 as

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Tier-1 tax/portfolio tools** — five new read-only `portfolio.py` subcommands (stdlib only; all
+  dollar/tax figures are estimates, not tax advice):
+  - `harvest` — tax-loss harvest candidates in taxable accounts, short-term losses first.
+  - `washsale <history.csv>` — cross-account wash-sale guardrail using a Fidelity Accounts History
+    CSV; for a current taxable loss, a same-security purchase in the prior `--window` days (through
+    `--as-of`) in any account is **BLOCKED** when in a tax-advantaged account (permanent disallowance)
+    else **CAUTION**, plus a forward repurchase warning and a ±window realized-history audit.
+    `--same-underlying` relates a stock loss to option buy-to-open on the same underlying.
+  - `sell <SYM> <SHARES>` — specific-ID/HIFO lot selector (`hifo`/`fifo`/`loss-first`/`min-tax`) with
+    the realized gain split ST/LT and the delta vs FIFO.
+  - `ripening` — taxable short-term lots and the date each becomes long-term (harvest losers first).
+  - `concentration` — cross-account value-by-symbol concentration, Herfindahl index, single-name flags.
+  New stdlib modules `scripts/analyze/common.py` (shared parsers, incl. `parse_us_date`),
+  `scripts/analyze/history.py` (transaction-history loader), and `scripts/analyze/tax_tools.py` (pure
+  analysis logic), plus a read-only `portfolio.fetch_lots`. All analysis is local and read-only.
 - The browser exporter now **auto-expands collapsed account groups** on the "All accounts" view
   (via Fidelity's own read-only "Expand groups" button), so all positions render before scraping —
   no manual "Expand groups" click required. A collapsed group is detected **structurally** (an
