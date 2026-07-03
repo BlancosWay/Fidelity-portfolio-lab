@@ -24,11 +24,13 @@ import sqlite3
 import sys
 from urllib.request import pathname2url
 
+from common import (  # noqa: F401  (re-exported so portfolio.<name> keeps working)
+    MONTHS, parse_money, parse_qty, parse_date, parse_us_date,
+    one_year_anniversary, holding_term,
+)
+
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DB = os.path.join(REPO_ROOT, "data", "portfolio.db")
-
-MONTHS = {m: i for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
 
 # Exact export schema shared with scripts/browser/fidelity_lot_export.js.
 EXPECTED_HEADERS = [
@@ -55,62 +57,10 @@ COLUMNS = [
 
 
 # --------------------------------------------------------------------------- parsing
-def parse_money(s):
-    """Parse '$1,425.00', '+64.40%', '-$900.00', '($5.00)' -> float (or None)."""
-    if s is None:
-        return None
-    s = s.strip()
-    if not s:
-        return None
-    neg = s.startswith("(") and s.endswith(")")
-    s = s.replace("(", "").replace(")", "").replace("$", "").replace(",", "").replace("+", "").replace("%", "").strip()
-    if s in ("", "-", "--"):
-        return None
-    try:
-        v = float(s)
-    except ValueError:
-        return None
-    return -v if neg else v
+# parse_money / parse_qty / parse_date / parse_us_date / one_year_anniversary / holding_term / MONTHS
+# now live in common.py and are re-imported above (kept as portfolio.<name> for backward compat).
 
 
-def parse_qty(s):
-    if s is None:
-        return 0.0
-    try:
-        return float(s.replace(",", "").strip())
-    except ValueError:
-        return 0.0
-
-
-def parse_date(s):
-    """Parse 'Mmm-DD-YYYY' (e.g. Mar-11-2026); also tolerate YYYY-MM-DD and MM/DD/YYYY."""
-    if not s:
-        return None
-    s = s.strip()
-    m = re.match(r"^([A-Za-z]{3})[-\s](\d{1,2})[-,\s]+(\d{4})$", s)
-    if m and m.group(1).lower() in MONTHS:
-        return dt.date(int(m.group(3)), MONTHS[m.group(1).lower()], int(m.group(2)))
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return dt.datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-
-def one_year_anniversary(d):
-    """One-year calendar anniversary; a Feb-29 date clamps to Feb-28 of the next year."""
-    try:
-        return d.replace(year=d.year + 1)
-    except ValueError:  # Feb-29 -> the next year has no Feb-29
-        return dt.date(d.year + 1, 2, 28)
-
-
-def holding_term(acquired, as_of):
-    """Long-Term iff as_of is strictly after the one-year anniversary; else Short-Term."""
-    if acquired is None:
-        return None
-    return "Long-Term" if as_of > one_year_anniversary(acquired) else "Short-Term"
 
 
 # --------------------------------------------------------------------------- db helpers
@@ -131,6 +81,19 @@ def readonly_connection(db_path):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA query_only=ON")
     return conn
+
+
+def fetch_lots(db_path=DEFAULT_DB):
+    """Read every lot row as a list of plain dicts via a strictly read-only connection.
+
+    The analysis subcommands (harvest/washsale/sell/ripening/concentration) call this; only ``load``
+    ever writes. Returns dicts keyed by the ``lots`` table columns (account, symbol, quantity,
+    date_acquired, term, cost_basis_total, current_value, gain_loss, ...)."""
+    conn = readonly_connection(db_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM lots").fetchall()]
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------------------------------- load
