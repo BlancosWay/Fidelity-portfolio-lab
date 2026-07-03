@@ -222,5 +222,61 @@ class ConcentrationTests(unittest.TestCase):
         self.assertAlmostEqual(s["cash_pct"], 1.0)
 
 
+class SelectLotsTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def _lots(self):
+        # symbol XYZ, price $10/sh (current_value 100 / qty 10); varying cost & term.
+        return [
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=12.0, cost_basis_total=120.0, gain_loss=-20.0,
+                date_acquired="2026-06-01", term="Short-Term"),   # ST loss, gain/sh -2
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=9.0, cost_basis_total=90.0, gain_loss=10.0,
+                date_acquired="2026-06-15", term="Short-Term"),   # ST gain, gain/sh +1
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),    # LT gain, gain/sh +2
+        ]
+
+    def test_hifo(self):
+        picks, s = tt.select_lots(self._lots(), "XYZ", 15, "hifo", as_of=self.AS_OF)
+        self.assertAlmostEqual(picks[0]["cost"], 12.0)   # highest cost first
+        self.assertAlmostEqual(picks[1]["cost"], 9.0)
+        self.assertAlmostEqual(s["realized_gain"], -15.0)
+
+    def test_fifo(self):
+        picks, s = tt.select_lots(self._lots(), "XYZ", 15, "fifo", as_of=self.AS_OF)
+        self.assertEqual(picks[0]["acquired"], "2024-01-01")  # oldest first
+        self.assertAlmostEqual(s["realized_gain"], 10.0)
+
+    def test_loss_first(self):
+        picks, _ = tt.select_lots(self._lots(), "XYZ", 5, "loss-first", as_of=self.AS_OF)
+        self.assertAlmostEqual(picks[0]["per_share_gain"], -2.0)
+
+    def test_min_tax_orders_by_impact(self):
+        # min-tax: A (ST loss) first, then C (LT gain, impact 2*0.15=0.30) before B (ST gain, 1*0.32=0.32).
+        picks, s = tt.select_lots(self._lots(), "XYZ", 15, "min-tax", st_rate=0.32, lt_rate=0.15, as_of=self.AS_OF)
+        self.assertAlmostEqual(picks[0]["cost"], 12.0)      # A (loss) first
+        self.assertEqual(picks[1]["term"], "Long-Term")     # small-impact LT gain before ST gain
+        self.assertAlmostEqual(s["realized_gain"], -10.0)
+        self.assertAlmostEqual(s["delta_vs_fifo"], -20.0)   # -10 vs FIFO +10
+
+    def test_fractional_and_insufficient(self):
+        _, s = tt.select_lots(self._lots(), "XYZ", 100, "fifo", as_of=self.AS_OF)
+        self.assertTrue(s["insufficient"])
+        self.assertAlmostEqual(s["available_shares"], 30.0)
+        self.assertAlmostEqual(s["filled_shares"], 30.0)
+        picks2, _ = tt.select_lots(self._lots(), "XYZ", 12.5, "hifo", as_of=self.AS_OF)
+        self.assertAlmostEqual(sum(p["qty_used"] for p in picks2), 12.5)
+
+    def test_skips_zero_qty_lot(self):
+        lots = self._lots() + [lot(account="Individual - TOD Test", symbol="XYZ", quantity=0,
+                                    current_value=0.0, avg_cost_basis=5.0, gain_loss=0.0,
+                                    date_acquired="2026-01-01", term="Short-Term")]
+        picks, _ = tt.select_lots(lots, "XYZ", 30, "fifo", as_of=self.AS_OF)
+        self.assertEqual(len(picks), 3)  # zero-qty lot skipped (safe_per_share -> None)
+
+
 if __name__ == "__main__":
     unittest.main()

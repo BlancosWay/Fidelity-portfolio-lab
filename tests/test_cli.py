@@ -111,5 +111,25 @@ class ConcentrationCliTests(unittest.TestCase):
         self.assertIn("HHI", text)
 
 
+SELL_ROWS = [
+    _row("Individual - TOD Test", "MULTI", 10, "Jan-05-2026", "$12.00", "$120.00", "$100.00", "-$20.00", "-16.67%"),
+    _row("Individual - TOD Test", "MULTI", 10, "Jun-15-2026", "$9.00", "$90.00", "$100.00", "+$10.00", "+11.11%"),
+    _row("Individual - TOD Test", "MULTI", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+]
+
+
+class SellCliTests(unittest.TestCase):
+    def test_output(self):
+        db = build_db(SELL_ROWS)
+        try:
+            text = run(portfolio.cmd_sell, db, "MULTI", 15, None, "hifo", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("MULTI", text)
+        self.assertIn("Individual - TOD Test", text)
+        self.assertIn("vs FIFO", text)
+        self.assertIn("not tax advice", text)
+
+
 if __name__ == "__main__":
     unittest.main()

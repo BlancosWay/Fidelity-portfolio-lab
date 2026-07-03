@@ -252,3 +252,105 @@ def concentration(lots, top=10, threshold=0.05):
         "threshold": threshold,
     }
     return rows, summary
+
+
+def _per_share_cost(lot):
+    """Cost basis per share: prefer the per-share Average Cost Basis; else Cost Basis Total/quantity."""
+    a = lot.get("avg_cost_basis")
+    try:
+        a = float(a)
+        if a > 0:
+            return a
+    except (TypeError, ValueError):
+        pass
+    try:
+        q, c = float(lot.get("quantity")), float(lot.get("cost_basis_total"))
+        if q > 0:
+            return c / q
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _prep_sale_lots(lots, symbol, account, as_of):
+    sym = (symbol or "").strip().upper()
+    out = []
+    for lot in lots:
+        if (lot.get("symbol") or "").strip().upper() != sym:
+            continue
+        if account and account.lower() not in (lot.get("account") or "").lower():
+            continue
+        price = safe_per_share(lot)
+        cost = _per_share_cost(lot)
+        if price is None or cost is None:
+            continue
+        out.append({
+            "account": lot.get("account"),
+            "symbol": lot.get("symbol"),
+            "acquired": (lot.get("date_acquired") or ""),
+            "term": recompute_term(lot, as_of),
+            "quantity": float(lot.get("quantity")),
+            "price": price,
+            "cost": cost,
+            "per_share_gain": price - cost,
+        })
+    return out
+
+
+def _order_sale_lots(prepped, strategy, st_rate, lt_rate):
+    if strategy == "hifo":
+        return sorted(prepped, key=lambda l: -l["cost"])
+    if strategy == "fifo":
+        return sorted(prepped, key=lambda l: (l["acquired"] or "9999-99-99"))
+    if strategy == "loss-first":
+        return sorted(prepped, key=lambda l: l["per_share_gain"])
+
+    def impact(l):  # min-tax: ascending per-share tax impact (losses first, small ST gain < large LT gain)
+        rate = st_rate if l["term"] == "Short-Term" else lt_rate
+        return l["per_share_gain"] * rate
+    return sorted(prepped, key=impact)
+
+
+def _consume_lots(ordered, shares):
+    remaining, picks = shares, []
+    for l in ordered:
+        if remaining <= 1e-9:
+            break
+        used = min(remaining, l["quantity"])
+        if used <= 0:
+            continue
+        picks.append({**l, "qty_used": used, "basis": used * l["cost"],
+                      "proceeds": used * l["price"], "realized_gain": used * l["per_share_gain"]})
+        remaining -= used
+    return picks, max(remaining, 0.0)
+
+
+def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=None,
+                st_rate=0.32, lt_rate=0.15):
+    """Choose which specific lots to sell to fulfill ``shares`` of ``symbol`` under a strategy:
+    hifo (highest cost first), fifo (oldest first), loss-first, or min-tax (ascending per-share tax
+    impact, default). Returns ``(picks, summary)`` with realized gain split ST/LT and the delta vs
+    FIFO. Proceeds are estimated from current value (a per-share price estimate, not tax advice)."""
+    as_of = as_of or dt.date.today()
+    prepped = _prep_sale_lots(lots, symbol, account, as_of)
+    picks, remaining = _consume_lots(_order_sale_lots(prepped, strategy, st_rate, lt_rate), shares)
+    fifo_picks, _ = _consume_lots(_order_sale_lots(prepped, "fifo", st_rate, lt_rate), shares)
+    total = sum(p["realized_gain"] for p in picks)
+    st_gain = sum(p["realized_gain"] for p in picks if p["term"] == "Short-Term")
+    lt_gain = sum(p["realized_gain"] for p in picks if p["term"] == "Long-Term")
+    fifo_total = sum(p["realized_gain"] for p in fifo_picks)
+    summary = {
+        "strategy": strategy,
+        "symbol": (symbol or "").strip().upper(),
+        "requested_shares": shares,
+        "filled_shares": shares - remaining,
+        "insufficient": remaining > 1e-9,
+        "available_shares": sum(l["quantity"] for l in prepped),
+        "realized_gain": total,
+        "st_gain": st_gain,
+        "lt_gain": lt_gain,
+        "fifo_realized_gain": fifo_total,
+        "delta_vs_fifo": total - fifo_total,
+        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+    }
+    return picks, summary

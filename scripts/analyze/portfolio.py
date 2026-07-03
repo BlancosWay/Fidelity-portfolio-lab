@@ -291,6 +291,25 @@ def cmd_concentration(db_path, top, threshold):
         print(f"  Over {threshold * 100:.0f}% single-name concentration: {', '.join(s['over_threshold'])}")
 
 
+def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
+    picks, s = tax_tools.select_lots(fetch_lots(db_path), symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    if not picks:
+        print(f"No sellable lots found for {s['symbol']}" + (f" in accounts matching '{account}'." if account else "."))
+        return
+    _print_table(
+        ["Account", "Acquired", "Term", "Qty", "Basis", "Est Proceeds", "Realized G/L"],
+        [(p["account"], p["acquired"], p["term"], round(p["qty_used"], 4), round(p["basis"], 2),
+          round(p["proceeds"], 2), round(p["realized_gain"], 2)) for p in picks],
+    )
+    print(f"\n{s['strategy']} sale of {s['filled_shares']:g}/{s['requested_shares']:g} sh {s['symbol']} (as of {as_of}):")
+    if s["insufficient"]:
+        print(f"  WARNING: only {s['available_shares']:g} shares available; short by "
+              f"{s['requested_shares'] - s['filled_shares']:g}.")
+    print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
+    print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
+    print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -316,6 +335,14 @@ def main(argv=None):
     cp = sub.add_parser("concentration", help="cross-account concentration & diversification")
     cp.add_argument("--top", type=int, default=10, help="show the top N positions (default 10)")
     cp.add_argument("--threshold", type=float, default=0.05, help="single-name concentration flag (default 0.05)")
+    slp = sub.add_parser("sell", help="pick which lots to sell (specific-ID/HIFO) to minimize tax")
+    slp.add_argument("symbol")
+    slp.add_argument("shares", type=float)
+    slp.add_argument("--account", help="restrict to accounts matching this text")
+    slp.add_argument("--strategy", choices=["hifo", "fifo", "loss-first", "min-tax"], default="min-tax")
+    slp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    slp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
+    slp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -338,6 +365,9 @@ def main(argv=None):
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     elif args.cmd == "concentration":
         cmd_concentration(args.db, args.top, args.threshold)
+    elif args.cmd == "sell":
+        cmd_sell(args.db, args.symbol, args.shares, args.account, args.strategy,
+                 _as_of(args.as_of), args.st_rate, args.lt_rate)
     return 0
 
 
