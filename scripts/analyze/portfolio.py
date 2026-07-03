@@ -29,6 +29,7 @@ from common import (  # noqa: F401  (re-exported so portfolio.<name> keeps worki
     one_year_anniversary, holding_term,
 )
 import tax_tools
+import history
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DB = os.path.join(REPO_ROOT, "data", "portfolio.db")
@@ -310,6 +311,37 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
     print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
 
 
+def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
+    candidates = tax_tools.taxable_loss_candidates(fetch_lots(db_path))
+    res = tax_tools.washsale(candidates, history.load_history(history_path), as_of, window, same_underlying)
+    c, s = res["candidates"], res["summary"]
+    if c:
+        _print_table(
+            ["Account", "Symbol", "Loss $", "Status", "Triggering purchases (any account)"],
+            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "", r["status"],
+              "; ".join(f"{t['action']} {t['qty']:g} in {t['account']} {t['date']}" for t in r["triggers"]) or "-")
+             for r in c],
+        )
+    else:
+        print("No taxable loss candidates to check.")
+    print(f"\nWash-sale check (as of {as_of}, +/-{window}-day window):")
+    print(f"  BLOCKED (replacement buy in a tax-advantaged account -> loss permanently disallowed): {s['blocked']}")
+    print(f"  CAUTION (replacement buy in a taxable account): {s['caution']}")
+    print(f"  CLEAN: {s['clean']}")
+    print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")
+    if res["realized"]:
+        print(f"\n  Realized-history review -- {len(res['realized'])} past sale(s) had a same-security "
+              "purchase nearby (confirm whether the sale was at a loss):")
+        for r in res["realized"]:
+            buys = "; ".join(f"{m['action']} {m['qty']:g} in {m['account']} {m['date']}" for m in r["matches"])
+            print(f"    {r['symbol']} sold {r['date']} in {r['account']}: {buys}")
+    hs, he = s["history_start"], s["history_end"]
+    if hs and he:
+        print(f"\n  NOTE: history covers {hs.isoformat()}..{he.isoformat()}; purchases/reinvestments before "
+              "that window are invisible, so CLEAN is not a guarantee.")
+    print("  [informational, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -343,6 +375,12 @@ def main(argv=None):
     slp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     slp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     slp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    wp = sub.add_parser("washsale", help="cross-account wash-sale guardrail (needs a Fidelity history CSV)")
+    wp.add_argument("history", help="path to an Accounts_History.csv")
+    wp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    wp.add_argument("--window", type=int, default=30, help="wash-sale window in days (default 30)")
+    wp.add_argument("--same-underlying", action="store_true",
+                    help="also match a stock loss against options on the same underlying (and vice versa)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -368,6 +406,8 @@ def main(argv=None):
     elif args.cmd == "sell":
         cmd_sell(args.db, args.symbol, args.shares, args.account, args.strategy,
                  _as_of(args.as_of), args.st_rate, args.lt_rate)
+    elif args.cmd == "washsale":
+        cmd_washsale(args.db, args.history, _as_of(args.as_of), args.window, args.same_underlying)
     return 0
 
 

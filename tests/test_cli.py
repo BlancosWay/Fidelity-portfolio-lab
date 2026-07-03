@@ -131,5 +131,52 @@ class SellCliTests(unittest.TestCase):
         self.assertIn("not tax advice", text)
 
 
+HIST_HEADER = ("Run Date,Account,Account Number,Action,Symbol,Description,Type,Exchange Quantity,"
+               "Exchange Currency,Currency,Price,Quantity,Exchange Rate,Commission,Fees,"
+               "Accrued Interest,Amount,Settlement Date")
+
+
+def build_history(rows):
+    fd, p = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(HIST_HEADER + "\n" + "\n".join(rows) + "\n")
+    return p
+
+
+class WashSaleCliTests(unittest.TestCase):
+    def test_blocked_output(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),
+        ])
+        hp = build_history([
+            '06-20-2026,Roth IRA Test,333,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-22-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, False)
+        finally:
+            os.unlink(db)
+            os.unlink(hp)
+        self.assertIn("BLOCKED", text)   # replacement buy in a Roth IRA -> permanent disallowance
+        self.assertIn("AAA", text)
+        self.assertIn("not tax advice", text)
+
+    def test_option_buy_to_open_same_underlying(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),
+        ])
+        hp = build_history([
+            '06-20-2026,Individual - TOD Test,222,YOU BOUGHT OPENING TRANSACTION CALL (AAA) AAA JAN 15 27 $30 (100 SHS) (Cash), -AAA270115C30,CALL (AAA),Cash,0,,USD,1.00,2,0,"","","",-200,06-22-2026',
+        ])
+        try:
+            clean = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, False)          # exact-match only
+            caution = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, True)         # --same-underlying
+        finally:
+            os.unlink(db)
+            os.unlink(hp)
+        self.assertIn("CLEAN: 1", clean)      # a call is not the same security by default
+        self.assertIn("CAUTION (replacement buy in a taxable account): 1", caution)
+
+
 if __name__ == "__main__":
     unittest.main()

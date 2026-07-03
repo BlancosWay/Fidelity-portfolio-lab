@@ -354,3 +354,87 @@ def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=No
         "est_tax": st_gain * st_rate + lt_gain * lt_rate,
     }
     return picks, summary
+
+
+def _securities_match(a, b, same_underlying):
+    """Whether two security_key dicts refer to the same security (exact key), or -- when
+    same_underlying -- the same underlying (so a stock loss relates to options on it, and vice versa)."""
+    if a["key"] and a["key"] == b["key"]:
+        return True
+    if same_underlying and a["underlying"] and a["underlying"] == b["underlying"]:
+        return True
+    return False
+
+
+def _is_acquisition(rec):
+    """A purchase that can trigger a wash sale: an equity BUY/REINVEST, or a buy-to-open of a long
+    option ("YOU BOUGHT OPENING" -> action_kind OPTION_OPEN). Writing an option (sell-to-open) is not
+    an acquisition, so it is excluded."""
+    if rec["action_kind"] in ("BUY", "REINVEST"):
+        return True
+    return rec["action_kind"] == "OPTION_OPEN" and (rec.get("action") or "").upper().startswith("YOU BOUGHT")
+
+
+def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
+    """Cross-account wash-sale guardrail.
+
+    (a) HARVEST-NOW guard: for each taxable loss candidate, look for an observed BUY/REINVEST of the
+        same security in [as_of - window, as_of] in ANY account. A match -> BLOCKED when that buy is in
+        a tax-advantaged account (the loss is permanently disallowed), else CAUTION. (The forward
+        [as_of+1, as_of+window] window is a behavioral warning surfaced by the CLI.)
+    (b) REALIZED-history audit: a past SELL is flagged for REVIEW when a same-security BUY/REINVEST
+        exists within +/-window days. Whether the sale was at a loss is NOT derivable from history
+        alone, so it is labeled "loss unknown" rather than asserted as a wash sale.
+
+    ``history`` records are the dicts returned by ``history.load_history``. Identity uses security_key.
+    Returns ``{"candidates": [...], "realized": [...], "summary": {...}}``."""
+    buys = [h for h in history if _is_acquisition(h)]
+    sells = [h for h in history if h["action_kind"] == "SELL"]
+
+    def sk_of(rec):
+        return {"key": rec["sec_key"], "underlying": rec["underlying"]}
+
+    lo, hi = as_of - dt.timedelta(days=window), as_of
+    cand_rows = []
+    for lot in loss_candidates:
+        sk = security_key(lot.get("symbol"))
+        triggers = [
+            {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
+             "qty": b["abs_qty"], "tax_advantaged": not is_taxable(b["account"])}
+            for b in buys
+            if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying)
+        ]
+        if not triggers:
+            status = "CLEAN"
+        elif any(t["tax_advantaged"] for t in triggers):
+            status = "BLOCKED"
+        else:
+            status = "CAUTION"
+        cand_rows.append({"symbol": lot.get("symbol"), "account": lot.get("account"),
+                          "loss": lot.get("gain_loss"), "status": status, "triggers": triggers})
+
+    realized = []
+    for sale in sells:
+        sk = security_key(sale.get("symbol"))
+        s_lo, s_hi = sale["date"] - dt.timedelta(days=window), sale["date"] + dt.timedelta(days=window)
+        matches = [
+            {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
+             "qty": b["abs_qty"]}
+            for b in buys
+            if s_lo <= b["date"] <= s_hi and _securities_match(sk, sk_of(b), same_underlying)
+        ]
+        if matches:
+            realized.append({"symbol": sale.get("symbol"), "account": sale.get("account"),
+                             "date": sale["date"].isoformat(), "status": "REVIEW (loss unknown)",
+                             "matches": matches})
+
+    summary = {
+        "window": window,
+        "blocked": sum(1 for c in cand_rows if c["status"] == "BLOCKED"),
+        "caution": sum(1 for c in cand_rows if c["status"] == "CAUTION"),
+        "clean": sum(1 for c in cand_rows if c["status"] == "CLEAN"),
+        "realized_review": len(realized),
+        "history_start": min((h["date"] for h in history), default=None),
+        "history_end": max((h["date"] for h in history), default=None),
+    }
+    return {"candidates": cand_rows, "realized": realized, "summary": summary}

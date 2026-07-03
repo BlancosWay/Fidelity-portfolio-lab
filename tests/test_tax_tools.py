@@ -17,6 +17,14 @@ def lot(account="Individual - TOD Test", symbol="AAPL", quantity=10.0, current_v
                 gain_loss_pct=gain_loss_pct, description=description, margin_cash=margin_cash)
 
 
+def hrec(date, account, symbol, kind="BUY", qty=10.0, action=None):
+    """Synthetic history record shaped like history.load_history output."""
+    sk = tt.security_key(symbol)
+    return dict(date=date, account=account, account_number="1", action=(action or kind), action_kind=kind,
+                symbol=symbol, sec_key=sk["key"], kind=sk["kind"], underlying=sk["underlying"],
+                signed_qty=qty, abs_qty=abs(qty), price=10.0, amount=-100.0)
+
+
 class IsTaxableTests(unittest.TestCase):
     def test_taxable(self):
         for a in ("Individual - TOD Test", "Individual - TOD 999", "Joint Brokerage Test", "Individual"):
@@ -276,6 +284,69 @@ class SelectLotsTests(unittest.TestCase):
                                     date_acquired="2026-01-01", term="Short-Term")]
         picks, _ = tt.select_lots(lots, "XYZ", 30, "fifo", as_of=self.AS_OF)
         self.assertEqual(len(picks), 3)  # zero-qty lot skipped (safe_per_share -> None)
+
+
+class WashSaleTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def cand(self, symbol="AAA", account="Individual - TOD Test"):
+        return lot(account=account, symbol=symbol, gain_loss=-100.0,
+                   date_acquired="2026-06-15", term="Short-Term")
+
+    def test_caution_taxable_buy_in_window(self):
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "CAUTION")
+        self.assertEqual(len(res["candidates"][0]["triggers"]), 1)
+
+    def test_blocked_ira_buy(self):
+        res = tt.washsale([self.cand("AAA")],
+                          [hrec(dt.date(2026, 6, 20), "Roth IRA Test", "AAA", "BUY")],
+                          self.AS_OF, window=30)
+        self.assertEqual(res["candidates"][0]["status"], "BLOCKED")   # permanent disallowance
+
+    def test_window_boundary(self):
+        c = [self.cand("AAA")]
+        in30 = [hrec(self.AS_OF - dt.timedelta(days=30), "Individual - TOD Test", "AAA")]
+        out31 = [hrec(self.AS_OF - dt.timedelta(days=31), "Individual - TOD Test", "AAA")]
+        self.assertEqual(tt.washsale(c, in30, self.AS_OF, 30)["candidates"][0]["status"], "CAUTION")
+        self.assertEqual(tt.washsale(c, out31, self.AS_OF, 30)["candidates"][0]["status"], "CLEAN")
+
+    def test_reinvest_triggers_dividend_does_not(self):
+        c = [self.cand("AAA")]
+        rei = [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA", "REINVEST")]
+        div = [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA", "DIVIDEND")]
+        self.assertEqual(tt.washsale(c, rei, self.AS_OF, 30)["candidates"][0]["status"], "CAUTION")
+        self.assertEqual(tt.washsale(c, div, self.AS_OF, 30)["candidates"][0]["status"], "CLEAN")
+
+    def test_same_underlying_option(self):
+        c = [self.cand("AAA")]
+        hist = [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA 30 Call", "BUY")]
+        self.assertEqual(tt.washsale(c, hist, self.AS_OF, 30, same_underlying=False)["candidates"][0]["status"], "CLEAN")
+        self.assertEqual(tt.washsale(c, hist, self.AS_OF, 30, same_underlying=True)["candidates"][0]["status"], "CAUTION")
+
+    def test_realized_review_loss_unknown(self):
+        hist = [
+            hrec(dt.date(2026, 6, 10), "Individual - TOD Test", "BBB", "SELL", qty=-5),
+            hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "BBB", "BUY"),
+        ]
+        res = tt.washsale([], hist, self.AS_OF, 30)
+        self.assertEqual(len(res["realized"]), 1)
+        self.assertIn("loss unknown", res["realized"][0]["status"])
+
+    def test_option_buy_to_open_same_underlying(self):
+        c = [self.cand("AAA")]  # stock loss on AAA
+        bto = [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA 30 Call",
+                    kind="OPTION_OPEN", action="YOU BOUGHT OPENING TRANSACTION CALL (AAA)")]
+        sto = [hrec(dt.date(2026, 6, 20), "Individual - TOD Test", "AAA 30 Call",
+                    kind="OPTION_OPEN", action="YOU SOLD OPENING TRANSACTION CALL (AAA)")]
+        # buy-to-open a same-underlying option -> CAUTION under --same-underlying
+        self.assertEqual(tt.washsale(c, bto, self.AS_OF, 30, same_underlying=True)["candidates"][0]["status"], "CAUTION")
+        # without the flag, an option is not the same security -> CLEAN
+        self.assertEqual(tt.washsale(c, bto, self.AS_OF, 30, same_underlying=False)["candidates"][0]["status"], "CLEAN")
+        # writing the option (sell-to-open) is not an acquisition -> CLEAN even with the flag
+        self.assertEqual(tt.washsale(c, sto, self.AS_OF, 30, same_underlying=True)["candidates"][0]["status"], "CLEAN")
 
 
 if __name__ == "__main__":
