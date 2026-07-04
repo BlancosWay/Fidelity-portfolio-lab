@@ -296,5 +296,61 @@ class DashboardCliTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
 
 
+class OptionsCliTests(unittest.TestCase):
+    ROWS = [
+        _row("Individual - TOD Test", "AAL", 100, "Jan-05-2024",
+             "$13.00", "$1,300.00", "$1,300.00", "$0.00", "0.00%"),                      # stock -> spot 13
+        _row("Individual - TOD Test", "AAL 17 Call", 5, "Mar-01-2026",
+             "$1.60", "$800.00", "$1,000.00", "+$200.00", "+25.00%", desc="Jul-17-2026"),  # option
+    ]
+
+    def test_output(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_options, db, AS_OF, None, 20)
+        finally:
+            os.unlink(db)
+        self.assertIn("AAL", text)
+        self.assertIn("Notional", text)
+        self.assertIn("not investment advice", text)
+
+    def test_options_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["options", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
+class ExpirationCliTests(unittest.TestCase):
+    ROWS = [
+        _row("Individual - TOD Test", "AAL", 100, "Jan-05-2024",
+             "$13.00", "$1,300.00", "$1,300.00", "$0.00", "0.00%"),
+        _row("Individual - TOD Test", "AAL 17 Call", 5, "Mar-01-2026",
+             "$1.60", "$800.00", "$1,000.00", "+$200.00", "+25.00%", desc="Jul-17-2026"),
+    ]
+
+    def test_output(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_expiration, db, AS_OF, None, None, 30)
+        finally:
+            os.unlink(db)
+        self.assertIn("AAL", text)
+        self.assertIn("nearest", text)
+        self.assertIn("not investment advice", text)
+
+    def test_within_respected(self):
+        db = build_db(self.ROWS)
+        try:                                        # AAL 17 Call expires Jul-17 (16d from AS_OF) -> outside 5d
+            text = run(portfolio.cmd_expiration, db, AS_OF, 5, None, 30)
+        finally:
+            os.unlink(db)
+        self.assertIn("No dated option positions within 5 days", text)
+
+    def test_expiration_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["expiration", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

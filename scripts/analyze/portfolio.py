@@ -448,6 +448,70 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
     print("\n[estimates, not tax advice]")
 
 
+def cmd_options(db_path, as_of, account, top):
+    positions, by_u, s = tax_tools.options_exposure(fetch_lots(db_path), as_of, account)
+    if not positions:
+        print("No option positions found.")
+        return
+    print("== Exposure by underlying ==")
+    _print_table(
+        ["Underlying", "Spot", "Calls(c)", "Puts(c)", "Premium $", "Notional $", "Bias", "Cover"],
+        [(a["underlying"],
+          f"{a['spot']:,.2f}" if a["spot"] is not None else "n/a",
+          f"{a['long_call_contracts'] - a['short_call_contracts']:g}",
+          f"{a['long_put_contracts'] - a['short_put_contracts']:g}",
+          round(a["premium"], 2), round(a["notional"], 2), a["bias"],
+          (f"{a['covered_contracts']:g}/{a['short_call_contracts']:g} cov"
+           if a["short_call_contracts"] > 0 else "")) for a in by_u[:top]],
+    )
+    print("\n== Top positions by notional ==")
+    _print_table(
+        ["Account", "Option", "Exp", "Days", "Contracts", "Premium $", "Notional $", "Money"],
+        [(p["account"], f"{p['underlying']} {p['strike']:g} {p['type'].upper()}", p["expiry"],
+          p["days_to_expiry"] if p["days_to_expiry"] is not None else "",
+          f"{p['contracts']:g}", round(p["premium"], 2), round(p["notional"], 2), p["moneyness"])
+         for p in positions[:top]],
+    )
+    print(f"\nOption positions (as of {as_of}): {s['n_positions']} across {s['n_underlyings']} underlyings.")
+    print(f"  Premium at risk (long): ${s['long_premium_at_risk']:,.2f}; notional exposure: "
+          f"${s['total_notional']:,.2f} (bullish ${s['bullish_notional']:,.2f} / bearish ${s['bearish_notional']:,.2f}).")
+    if s["has_short"]:
+        print(f"  Short credit: ${s['short_credit']:,.2f}; put-assignment cash if assigned: "
+              f"${s['total_put_assignment_cash']:,.2f}.")
+        if s["has_naked_calls"]:
+            print("  WARNING: naked short calls present (short calls beyond held shares).")
+    print("  Notional = strike x 100 x contracts (multiplier 100; adjusted options may differ). "
+          "ITM/OTM uses a spot from your largest held stock lot per underlying (approximate -- verify "
+          "against your broker). Delta/theta need live quotes (not computed). [informational, not investment advice]")
+
+
+def cmd_expiration(db_path, as_of, within, account, top):
+    rows, s = tax_tools.expiration_calendar(fetch_lots(db_path), as_of, within, account)
+    if not rows:
+        suffix = f" within {within} days" if within is not None else ""
+        print(f"No dated option positions{suffix}.")
+        return
+    _print_table(
+        ["Exp", "Days", "Account", "Option", "Contracts", "AtRisk $", "Money", "AssignCash $"],
+        [(r["expiry"], r["days"], r["account"],
+          f"{r['underlying']} {r['strike']:g} {r['type'].upper()}", f"{r['contracts']:g}",
+          round(r["premium_at_risk"], 2), r["moneyness"],
+          round(r["assignment_cash"], 2) if r["assignment_cash"] else "") for r in rows[:top]],
+    )
+    win = within if within is not None else 30
+    winphrase = f" within {within}d" if within is not None else ""
+    print(f"\nOption expirations (as of {as_of}){winphrase}: {s['n']} positions; "
+          f"nearest {s['nearest_expiry']} ({s['nearest_days']}d).")
+    print(f"  Premium at risk (long): ${s['total_premium_at_risk']:,.2f}; within {win}d: "
+          f"${s['soon_premium_at_risk']:,.2f} across {s['n_expiring_soon']} position(s); ITM now: {s['n_itm']}.")
+    if s["total_assignment_cash"] > 0:
+        print(f"  Short-put assignment cash if assigned: ${s['total_assignment_cash']:,.2f}.")
+    if s["expired"]:
+        print(f"  NOTE: {s['expired']} already-expired position(s) present in the data.")
+    print("  ITM/OTM uses a spot derived from a held stock lot when available (else n/a; approximate). "
+          "[informational, not investment advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -511,6 +575,15 @@ def main(argv=None):
     dp.add_argument("--within", type=int, default=60, help="ripening horizon in days (default 60)")
     dp.add_argument("--income", type=float, help="taxable income for the 0%% LTCG capacity section")
     dp.add_argument("--ceiling", type=float, help="0%% LTCG bracket top for the capacity section")
+    op = sub.add_parser("options", help="options exposure dashboard (premium, notional, moneyness)")
+    op.add_argument("--account", help="restrict to accounts matching this text")
+    op.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    op.add_argument("--top", type=int, default=20, help="rows to show in each table (default 20)")
+    ep = sub.add_parser("expiration", help="option expiration & assignment calendar")
+    ep.add_argument("--within", type=int, help="only options expiring within N days")
+    ep.add_argument("--account", help="restrict to accounts matching this text")
+    ep.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    ep.add_argument("--top", type=int, default=30, help="rows to show (default 30)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -546,6 +619,10 @@ def main(argv=None):
     elif args.cmd == "dashboard":
         cmd_dashboard(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate, args.within,
                       args.income, args.ceiling)
+    elif args.cmd == "options":
+        cmd_options(args.db, _as_of(args.as_of), args.account, args.top)
+    elif args.cmd == "expiration":
+        cmd_expiration(args.db, _as_of(args.as_of), args.within, args.account, args.top)
     return 0
 
 
