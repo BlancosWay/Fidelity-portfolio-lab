@@ -64,8 +64,9 @@ Real data:
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
-> (default today) applies to `harvest`/`ripening`/`sell`/`washsale`; `--st-rate`/`--lt-rate` (defaults
-> `0.32`/`0.15`) tune the labeled estimates on `harvest`/`ripening`/`sell`.
+> (default today) applies to every tax subcommand (`harvest`/`ripening`/`sell`/`washsale`/`capacity`/
+> `gift`/`dashboard`); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
+> commands that accept them (plus `capacity`'s `--within-rate`).
 >
 > The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches

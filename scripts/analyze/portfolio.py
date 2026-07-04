@@ -384,21 +384,21 @@ def cmd_capacity(db_path, income, ceiling, ceiling_label, target_gain, account, 
 
 def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
     rows, s = tax_tools.gift_candidates(fetch_lots(db_path), as_of, min_gain_pct, account, lt_rate)
-    if not rows:
-        print("No taxable long-term appreciated lots at/above the gain threshold.")
-        return
-    _print_table(
-        ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Est Tax Avoided"],
-        [(r["account"], r["symbol"], r["acquired"], r["quantity"],
-          round(r["basis"], 2) if r["basis"] is not None else "",
-          round(r["value"], 2) if r["value"] is not None else "",
-          round(r["gain"], 2),
-          f"{r['gain_pct']:.2f}%" if r["gain_pct"] is not None else "n/a",
-          round(r["tax_avoided"], 2)) for r in rows[:top]],
-    )
-    print(f"\nDonation candidates (taxable long-term gains, as of {as_of}): {s['n_candidates']}.")
-    print(f"  Donatable FMV: ${s['total_fmv']:,.2f}; unrealized LT gain: ${s['total_gain']:,.2f}; "
-          f"est. cap-gains tax avoided if donated (LT@{lt_rate:.0%}): ~${s['total_tax_avoided']:,.2f}.")
+    if rows:
+        _print_table(
+            ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Est Tax Avoided"],
+            [(r["account"], r["symbol"], r["acquired"], r["quantity"],
+              round(r["basis"], 2) if r["basis"] is not None else "",
+              round(r["value"], 2) if r["value"] is not None else "",
+              round(r["gain"], 2),
+              f"{r['gain_pct']:.2f}%" if r["gain_pct"] is not None else "n/a",
+              round(r["tax_avoided"], 2)) for r in rows[:top]],
+        )
+        print(f"\nDonation candidates (taxable long-term gains, as of {as_of}): {s['n_candidates']}.")
+        print(f"  Donatable FMV: ${s['total_fmv']:,.2f}; unrealized LT gain: ${s['total_gain']:,.2f}; "
+              f"est. cap-gains tax avoided if donated (LT@{lt_rate:.0%}): ~${s['total_tax_avoided']:,.2f}.")
+    else:
+        print(f"No taxable long-term appreciated lots at/above the gain threshold (as of {as_of}).")
     print(f"  {s['n_short_term_gain']} short-term gain lot(s) -> wait for long-term before donating; "
           f"{s['n_loss']} loss lot(s) -> sell to harvest instead (see 'harvest'/'sell').")
     print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")

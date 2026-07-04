@@ -244,6 +244,24 @@ class GiftCliTests(unittest.TestCase):
             portfolio.main(["gift", "--help"])
         self.assertEqual(cm.exception.code, 0)
 
+    def test_no_candidates_still_steers(self):
+        # Only a short-term gain lot and a long-term loss lot -> no donation candidates, but the
+        # steering counts must still print (they are the whole point of the anti-buckets).
+        db = build_db([
+            _row("Individual - TOD Test", "STG", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$1,300.00", "+$300.00", "+30.00%"),
+            _row("Individual - TOD Test", "LTL", 10, "Jan-05-2024",
+                 "$200.00", "$2,000.00", "$1,500.00", "-$500.00", "-25.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_gift, db, 0.0, 20, None, AS_OF, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("No taxable long-term appreciated lots", text)
+        self.assertIn("1 short-term gain lot(s)", text)
+        self.assertIn("1 loss lot(s)", text)
+        self.assertIn("not tax advice", text)
+
 
 class DashboardCliTests(unittest.TestCase):
     ROWS = [
