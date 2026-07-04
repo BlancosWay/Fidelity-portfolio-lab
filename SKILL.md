@@ -53,7 +53,8 @@ python scripts/analyze/portfolio.py load path/to/fidelity_lots.csv
 ### 3. Analyze
 ```
 python scripts/analyze/portfolio.py summary       # units/symbol across accounts; long vs short; per account
-python scripts/analyze/portfolio.py symbol AAPL   # per-lot detail + totals for one symbol
+python scripts/analyze/portfolio.py summary --as-of 2027-01-01   # recompute holding term as of a date
+python scripts/analyze/portfolio.py symbol AAPL   # per-lot detail + totals for one symbol (--as-of too)
 python scripts/analyze/portfolio.py accounts      # accounts overview
 python scripts/analyze/portfolio.py query "SELECT symbol, ROUND(SUM(quantity),4) FROM lots GROUP BY symbol ORDER BY 2 DESC"
 ```
@@ -62,6 +63,9 @@ Use **`query`** for any ad-hoc question the user asks — it is **read-only** (o
 user's question into SQL over the `lots` table. Every command opens the DB read-only and never
 creates a file: run before any `load` (or against a deleted DB) and it prints
 `No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (no traceback, no 0-byte DB).
+`summary`/`symbol` recompute each lot's Long/Short term from its acquisition date as of `--as-of`
+(default today), so classifications stay correct as lots cross one year; cash is shown per symbol
+and in each account's market value but is excluded from the Long/Short split.
 
 ### 4. Tax / portfolio tools (Tier-1)
 All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`

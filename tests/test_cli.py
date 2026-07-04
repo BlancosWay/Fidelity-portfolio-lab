@@ -579,5 +579,67 @@ class DbReadonlyGuardTests(unittest.TestCase):
             os.unlink(db)
 
 
+class Bug5ReportTests(unittest.TestCase):
+    """Node reports-fresh-term (Bug 5): summary/symbol recompute holding term as of --as-of, stay
+    read-only (closing the Bug-8 gap deferred from node 1), and preserve cash in the right places."""
+
+    def _missing_db_path(self):
+        fd, p = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(p)
+        return p
+
+    def test_summary_and_symbol_are_readonly_missing_db(self):
+        for fn, extra in ((portfolio.summary, ()), (portfolio.symbol_detail, ("AAPL",))):
+            p = self._missing_db_path()
+            try:
+                text = run(fn, p, *extra)
+                self.assertIn("load", text.lower(), f"{fn.__name__} should print a load hint")
+                self.assertFalse(os.path.exists(p), f"{fn.__name__} must not create the DB file")
+            finally:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+    def test_summary_preserves_cash_in_symbol_and_account_value(self):
+        db = build_db(SAMPLE_ROWS)
+        try:
+            text = run(portfolio.summary, db, AS_OF)
+        finally:
+            os.unlink(db)
+        self.assertIn("CASH", text)     # cash shown as a per-symbol row
+        self.assertIn("2510", text)     # TOD account market value 900+850+260+500 includes the $500 cash
+
+    def test_summary_recomputes_term_as_of_later_date(self):
+        # A lot stored Short-Term becomes Long-Term when summary is run with a later --as-of.
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+        ])
+        try:
+            early = run(portfolio.summary, db, dt.date(2026, 8, 1))    # <1yr -> Short-Term
+            late = run(portfolio.summary, db, dt.date(2027, 8, 1))     # >1yr -> Long-Term
+        finally:
+            os.unlink(db)
+        self.assertIn("Short-Term", early)
+        self.assertNotIn("Long-Term", early)
+        self.assertIn("Long-Term", late)
+        self.assertNotIn("Short-Term", late)
+
+    def test_symbol_recomputes_term_as_of_later_date(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+        ])
+        try:
+            late = run(portfolio.symbol_detail, db, "AAPL", dt.date(2027, 8, 1))
+        finally:
+            os.unlink(db)
+        self.assertIn("Long-Term", late)
+        self.assertIn("10.0 long", late)     # totals reflect the recomputed long term
+
+
 if __name__ == "__main__":
     unittest.main()

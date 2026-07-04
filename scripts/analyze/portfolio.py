@@ -206,51 +206,55 @@ def _print_table(headers, rows):
         print("  ".join(r[i].ljust(widths[i]) for i in range(len(headers))))
 
 
-def summary(db_path):
-    conn = _connect(db_path)
+def summary(db_path, as_of=None):
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    as_of = as_of or dt.date.today()
+    ov = tax_tools.holdings_overview(lots, as_of)
     print("== Units per symbol across ALL accounts ==")
-    rows = conn.execute(
-        """SELECT symbol, ROUND(SUM(quantity),4) units, COUNT(*) lots,
-                  COUNT(DISTINCT account) accts,
-                  ROUND(SUM(CASE WHEN term='Long-Term'  THEN quantity ELSE 0 END),4) long_units,
-                  ROUND(SUM(CASE WHEN term='Short-Term' THEN quantity ELSE 0 END),4) short_units
-           FROM lots GROUP BY symbol ORDER BY symbol""").fetchall()
-    _print_table(["Symbol", "Units", "Lots", "#Accts", "Long(>1yr)", "Short(<=1yr)"], [tuple(r) for r in rows])
+    _print_table(["Symbol", "Units", "Lots", "#Accts", "Long(>1yr)", "Short(<=1yr)"],
+                 [(r["symbol"], r["units"], r["lots"], r["accts"], r["long_units"], r["short_units"])
+                  for r in ov["by_symbol"]])
 
     print("\n== Long vs Short (whole portfolio) ==")
-    rows = conn.execute(
-        """SELECT term, COUNT(*) lots, ROUND(SUM(current_value),2) market_value
-           FROM lots WHERE term IN ('Long-Term','Short-Term') GROUP BY term ORDER BY term""").fetchall()
-    _print_table(["Term", "Lots", "Market Value"], [tuple(r) for r in rows])
+    _print_table(["Term", "Lots", "Market Value"],
+                 [(r["term"], r["lots"], r["market_value"]) for r in ov["term_totals"]])
 
     print("\n== Per account by term ==")
-    rows = conn.execute(
-        """SELECT account,
-                  SUM(CASE WHEN term='Long-Term'  THEN 1 ELSE 0 END) long_lots,
-                  SUM(CASE WHEN term='Short-Term' THEN 1 ELSE 0 END) short_lots,
-                  ROUND(SUM(current_value),2) market_value
-           FROM lots GROUP BY account ORDER BY account""").fetchall()
-    _print_table(["Account", "Long lots", "Short lots", "Market Value"], [tuple(r) for r in rows])
-    conn.close()
+    _print_table(["Account", "Long lots", "Short lots", "Market Value"],
+                 [(r["account"], r["long_lots"], r["short_lots"], r["market_value"]) for r in ov["by_account"]])
 
 
-def symbol_detail(db_path, sym):
-    conn = _connect(db_path)
-    rows = conn.execute(
-        "SELECT account, quantity, date_acquired, term, current_value FROM lots WHERE symbol=? ORDER BY date_acquired",
-        (sym,)).fetchall()
-    if not rows:
-        print(f"No lots for symbol {sym!r}")
-        conn.close()
+def symbol_detail(db_path, sym, as_of=None):
+    lots = read_lots(db_path)
+    if lots is None:
         return
-    _print_table(["Account", "Quantity", "Acquired", "Term", "Current Value"], [tuple(r) for r in rows])
-    t = conn.execute(
-        """SELECT ROUND(SUM(quantity),4) u,
-                  ROUND(SUM(CASE WHEN term='Long-Term'  THEN quantity ELSE 0 END),4) lu,
-                  ROUND(SUM(CASE WHEN term='Short-Term' THEN quantity ELSE 0 END),4) su
-           FROM lots WHERE symbol=?""", (sym,)).fetchone()
-    print(f"\nTotal {sym}: {t['u']} units ({t['lu']} long, {t['su']} short)")
-    conn.close()
+    as_of = as_of or dt.date.today()
+    matched = [lot for lot in lots if (lot.get("symbol") or "") == sym]
+    if not matched:
+        print(f"No lots for symbol {sym!r}")
+        return
+
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+
+    rows, units, long_units, short_units = [], 0.0, 0.0, 0.0
+    for lot in sorted(matched, key=lambda l: (l.get("date_acquired") or "")):
+        term = tax_tools.recompute_term(lot, as_of)
+        qty = _num(lot.get("quantity"))
+        rows.append((lot.get("account"), lot.get("quantity"), lot.get("date_acquired"),
+                     term, lot.get("current_value")))
+        units += qty
+        if term == "Long-Term":
+            long_units += qty
+        elif term == "Short-Term":
+            short_units += qty
+    _print_table(["Account", "Quantity", "Acquired", "Term", "Current Value"], rows)
+    print(f"\nTotal {sym}: {round(units, 4)} units ({round(long_units, 4)} long, {round(short_units, 4)} short)")
 
 
 def accounts_list(db_path):
@@ -608,9 +612,11 @@ def main(argv=None):
     lp = sub.add_parser("load", help="load a lots CSV into the DB")
     lp.add_argument("csv")
     lp.add_argument("--as-of", help="YYYY-MM-DD term-as-of date (default today)")
-    sub.add_parser("summary", help="print standard aggregations")
+    smp = sub.add_parser("summary", help="print standard aggregations")
+    smp.add_argument("--as-of", help="YYYY-MM-DD; recompute holding term as of this date (default today)")
     sp = sub.add_parser("symbol", help="detail for one symbol")
     sp.add_argument("sym")
+    sp.add_argument("--as-of", help="YYYY-MM-DD; recompute holding term as of this date (default today)")
     sub.add_parser("accounts", help="list accounts")
     qp = sub.add_parser("query", help="run a read-only SELECT over the lots table")
     qp.add_argument("sql")
@@ -683,9 +689,9 @@ def main(argv=None):
         as_of = dt.date.fromisoformat(args.as_of) if args.as_of else None
         print(f"Loaded {load(args.csv, args.db, as_of)} lots into {args.db}")
     elif args.cmd == "summary":
-        summary(args.db)
+        summary(args.db, _as_of(args.as_of))
     elif args.cmd == "symbol":
-        symbol_detail(args.db, args.sym)
+        symbol_detail(args.db, args.sym, _as_of(args.as_of))
     elif args.cmd == "accounts":
         accounts_list(args.db)
     elif args.cmd == "query":

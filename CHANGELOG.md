@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **`summary` and `symbol` now recompute the holding term as of a date and are read-only.** The DB
+  stores the Long/Short term computed at `load` time, so after a lot crossed its one-year mark the
+  reports still showed it as short-term. Both commands now recompute each lot's term from its
+  acquisition date (new pure `holdings_overview` helper) and accept `--as-of YYYY-MM-DD` (default
+  today); they also open the DB read-only via the same missing-portfolio guard as the other commands.
+  Cash is still shown per symbol and counted in each account's market value — it is excluded only from
+  the Long/Short term split, exactly as before.
 - **Analysis commands are strictly read-only and fail gracefully on a missing portfolio.** Running any
   command against a never-loaded (or since-deleted) DB previously either created a 0-byte SQLite file
   or raised a raw `sqlite3` traceback. Every command now opens the DB read-only, and on a missing file

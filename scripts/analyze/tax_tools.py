@@ -706,6 +706,74 @@ def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
     return rows, summary
 
 
+def holdings_overview(lots, as_of):
+    """Portfolio holdings aggregations with the holding **term recomputed as of ``as_of``** (the DB
+    does not persist ``load``'s as-of, so the stored ``term`` can be stale). Pure function over the
+    lot dicts; mirrors the three ``summary`` tables exactly:
+
+      * ``by_symbol``   -- every lot grouped by symbol (**cash included**): total units, lot count,
+                           distinct-account count, and the long/short unit split (cash, whose
+                           recomputed term is blank, contributes 0 to the split).
+      * ``term_totals`` -- lot count and market value for Long-Term vs Short-Term **only** (cash is
+                           excluded here -- and ONLY here -- because its term is blank).
+      * ``by_account``  -- every lot grouped by account (**cash included in market value**): long/short
+                           lot counts and total market value.
+
+    All figures are informational, NOT tax advice."""
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+
+    by_symbol, by_account, term_totals = {}, {}, {}
+    for lot in lots:
+        sym = (lot.get("symbol") or "").strip()
+        acct = (lot.get("account") or "").strip()
+        term = recompute_term(lot, as_of)
+        qty = _num(lot.get("quantity"))
+        val = _num(lot.get("current_value"))
+
+        s = by_symbol.setdefault(sym, {"symbol": sym, "units": 0.0, "lots": 0,
+                                       "accounts": set(), "long_units": 0.0, "short_units": 0.0})
+        s["units"] += qty
+        s["lots"] += 1
+        s["accounts"].add(acct)
+        if term == "Long-Term":
+            s["long_units"] += qty
+        elif term == "Short-Term":
+            s["short_units"] += qty
+
+        a = by_account.setdefault(acct, {"account": acct, "long_lots": 0, "short_lots": 0,
+                                         "market_value": 0.0})
+        a["market_value"] += val
+        if term == "Long-Term":
+            a["long_lots"] += 1
+        elif term == "Short-Term":
+            a["short_lots"] += 1
+
+        if term in ("Long-Term", "Short-Term"):
+            t = term_totals.setdefault(term, {"term": term, "lots": 0, "market_value": 0.0})
+            t["lots"] += 1
+            t["market_value"] += val
+
+    by_symbol_rows = [{
+        "symbol": by_symbol[k]["symbol"], "units": round(by_symbol[k]["units"], 4),
+        "lots": by_symbol[k]["lots"], "accts": len(by_symbol[k]["accounts"]),
+        "long_units": round(by_symbol[k]["long_units"], 4),
+        "short_units": round(by_symbol[k]["short_units"], 4),
+    } for k in sorted(by_symbol)]
+    term_rows = [{
+        "term": term_totals[k]["term"], "lots": term_totals[k]["lots"],
+        "market_value": round(term_totals[k]["market_value"], 2),
+    } for k in sorted(term_totals)]
+    account_rows = [{
+        "account": by_account[k]["account"], "long_lots": by_account[k]["long_lots"],
+        "short_lots": by_account[k]["short_lots"], "market_value": round(by_account[k]["market_value"], 2),
+    } for k in sorted(by_account)]
+    return {"by_symbol": by_symbol_rows, "term_totals": term_rows, "by_account": account_rows}
+
+
 def unrealized_by_account(lots, as_of):
     """Per-account unrealized gain/loss split short-term vs long-term (informational, NOT tax advice).
 

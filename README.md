@@ -49,8 +49,8 @@ Real data:
 | Command | Purpose |
 |---|---|
 | `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). |
-| `summary` | Units per symbol across accounts; long vs short; per-account by term. |
-| `symbol <SYM>` | Per-lot detail + totals for one symbol. |
+| `summary [--as-of YYYY-MM-DD]` | Units per symbol across accounts; long vs short; per-account by term (term recomputed as-of). |
+| `symbol <SYM> [--as-of YYYY-MM-DD]` | Per-lot detail + totals for one symbol (term recomputed as-of). |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
 | `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + $3k cap. |
@@ -66,8 +66,9 @@ Real data:
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
-> (default today) applies to every tax subcommand (`harvest`/`ripening`/`sell`/`washsale`/`capacity`/
-> `gift`/`dashboard`); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
+> (default today) applies to every tax subcommand (`summary`/`symbol`/`harvest`/`ripening`/`sell`/
+> `washsale`/`capacity`/`gift`/`dashboard`) and recomputes each lot's holding term from its acquisition
+> date (the DB stores the term as of `load`, which goes stale as lots cross one year); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
 > commands that accept them (plus `capacity`'s `--within-rate`).
 >
 > The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
