@@ -49,13 +49,13 @@ Real data:
 | Command | Purpose |
 |---|---|
 | `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). |
-| `summary` | Units per symbol across accounts; long vs short; per-account by term. |
-| `symbol <SYM>` | Per-lot detail + totals for one symbol. |
+| `summary [--as-of YYYY-MM-DD]` | Units per symbol across accounts; long vs short; per-account by term (term recomputed as-of). |
+| `symbol <SYM> [--as-of YYYY-MM-DD]` | Per-lot detail + totals for one symbol (term recomputed as-of). |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
 | `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + $3k cap. |
 | `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
-| `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
+| `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index (options and non-positive-value symbols excluded from the equity ranking). |
 | `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded. |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
@@ -66,11 +66,14 @@ Real data:
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
-> (default today) applies to every tax subcommand (`harvest`/`ripening`/`sell`/`washsale`/`capacity`/
-> `gift`/`dashboard`); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
+> (default today) applies to every tax subcommand (`summary`/`symbol`/`harvest`/`ripening`/`sell`/
+> `washsale`/`capacity`/`gift`/`dashboard`) and recomputes each lot's holding term from its acquisition
+> date (the DB stores the term as of `load`, which goes stale as lots cross one year); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
 > commands that accept them (plus `capacity`'s `--within-rate`).
 >
 > The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
+> A command run before any `load` (or against a since-deleted DB) never creates or writes a file — it
+> prints `No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (`query` with a non-zero code).
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches
 > IRA/Roth/HSA/BrokerageLink/401k/403b/529 is treated as tax-advantaged and excluded, and every other
 > account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the

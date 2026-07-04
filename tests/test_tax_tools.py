@@ -1057,5 +1057,104 @@ class PriceDispersionTests(unittest.TestCase):
         self.assertEqual(tt.price_dispersion_flags(lots), {})
 
 
+class Tier2ReproTests(unittest.TestCase):
+    """Reproduce four remaining gaps (crucible reproduce gate). Each asserts the FIXED behavior and
+    currently FAILS. Synthetic data only."""
+    AS_OF = dt.date(2026, 7, 1)
+
+    # Bug 5: holdings overview must recompute term from the acquisition date, not the stale stored term.
+    def test_bug5_holdings_overview_recomputes_term(self):
+        stale = lot(account="Individual - TOD Test", symbol="AAPL", quantity=10.0,
+                    date_acquired="2024-01-01", term="Short-Term",   # stored stale; really Long-Term now
+                    current_value=2000.0, cost_basis_total=1000.0, gain_loss=1000.0, gain_loss_pct=100.0)
+        ov = tt.holdings_overview([stale], self.AS_OF)
+        by_sym = {r["symbol"]: r for r in ov["by_symbol"]}
+        self.assertAlmostEqual(by_sym["AAPL"]["long_units"], 10.0)
+        self.assertAlmostEqual(by_sym["AAPL"]["short_units"], 0.0)
+
+    def test_holdings_overview_cash_placement(self):
+        # Cash belongs in by_symbol and in per-account market value, but NOT in the long/short term split.
+        lots = [
+            lot(account="A", symbol="AAA", quantity=10.0, current_value=1000.0,
+                date_acquired="2024-01-01", term="Short-Term"),   # recomputes Long-Term as of AS_OF
+            lot(account="A", symbol="CASH", quantity=None, current_value=500.0,
+                date_acquired="", term=""),                        # cash: no acquisition, blank term
+        ]
+        ov = tt.holdings_overview(lots, self.AS_OF)
+        syms = {r["symbol"]: r for r in ov["by_symbol"]}
+        self.assertIn("CASH", syms)                                # cash shown in the per-symbol table
+        self.assertEqual(syms["CASH"]["long_units"], 0.0)
+        self.assertEqual(syms["CASH"]["short_units"], 0.0)
+        self.assertAlmostEqual(sum(r["market_value"] for r in ov["term_totals"]), 1000.0)   # excludes cash
+        self.assertAlmostEqual(sum(r["market_value"] for r in ov["by_account"]), 1500.0)    # includes cash
+
+    # Bug 6a: options must be excluded from the equity value-concentration ranking.
+    def test_bug6_concentration_excludes_options(self):
+        lots = [
+            lot(account="A", symbol="AAPL", current_value=10000.0),
+            lot(account="A", symbol="AAPL 250 Call", current_value=1000.0, description="Jul-17-2026"),
+        ]
+        rows, s = tt.concentration(lots)
+        self.assertEqual([r["symbol"] for r in rows], ["AAPL"])   # the option is not a separate name
+        self.assertEqual(s["n_options_excluded"], 1)
+
+    # Bug 6b: a non-positive (short/corrupt) value must not collapse the whole report.
+    def test_bug6_concentration_negative_value_does_not_collapse(self):
+        lots = [
+            lot(account="A", symbol="AAPL", current_value=1000.0),
+            lot(account="A", symbol="BADSTK", current_value=-5000.0),   # corrupt/negative
+        ]
+        rows, s = tt.concentration(lots)
+        self.assertIn("AAPL", [r["symbol"] for r in rows])          # real position still shown
+
+    def test_bug6_excluded_counts_reported(self):
+        # Both exclusions are counted and the negative symbol is dropped from the ranking.
+        lots = [
+            lot(account="A", symbol="AAPL", current_value=1000.0),
+            lot(account="A", symbol="AAPL 250 Call", current_value=300.0, description="Jul-17-2026"),
+            lot(account="A", symbol="SHORTY", current_value=-200.0),
+        ]
+        rows, s = tt.concentration(lots)
+        self.assertEqual([r["symbol"] for r in rows], ["AAPL"])
+        self.assertEqual(s["n_options_excluded"], 1)
+        self.assertEqual(s["n_nonpositive_excluded"], 1)
+        self.assertTrue(all(r["is_option"] is False for r in rows))   # is_option kept but always False
+
+    # Bug 7: a zero-quantity closed lot is not a live position.
+    def test_bug7_zero_qty_not_harvestable(self):
+        z = lot(account="Individual - TOD Test", symbol="CLOSED", quantity=0.0, current_value=0.0,
+                gain_loss=-123.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=123.0)
+        self.assertEqual(tt.taxable_loss_candidates([z]), [])
+        self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0)
+
+    def test_bug7_non_live_quantities_excluded_everywhere(self):
+        # Zero, negative, non-numeric, and missing quantities are all non-live and excluded from every
+        # live-position analysis.
+        for q in (0.0, -5.0, "n/a", None):
+            z = lot(account="Individual - TOD Test", symbol="X", quantity=q, current_value=100.0,
+                    gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
+            self.assertEqual(tt.taxable_loss_candidates([z]), [], q)
+            self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0, q)
+            self.assertEqual(tt.unrealized_by_account([z], self.AS_OF)[0], [], q)
+            self.assertEqual(tt.ripening([z], self.AS_OF)[0], [], q)              # short-term loss can't ripen
+            gain = lot(account="Individual - TOD Test", symbol="G", quantity=q, current_value=2000.0,
+                       gain_loss=500.0, date_acquired="2024-01-01", term="Long-Term",
+                       cost_basis_total=1500.0, gain_loss_pct=33.3)
+            self.assertEqual(tt.gift_candidates([gain], self.AS_OF)[0], [], q)    # not a live donation lot
+
+    def test_bug7_live_positive_quantity_still_counted(self):
+        # A normal live lot is still counted by every analysis (the guard must not over-exclude).
+        live = lot(account="Individual - TOD Test", symbol="Y", quantity=10.0, current_value=100.0,
+                   gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
+        self.assertEqual(len(tt.taxable_loss_candidates([live])), 1)
+        self.assertEqual(tt.liquidation_estimate([live], self.AS_OF)["n_lots"], 1)
+        self.assertEqual(len(tt.unrealized_by_account([live], self.AS_OF)[0]), 1)
+        self.assertEqual(len(tt.ripening([live], self.AS_OF)[0]), 1)
+        gain = lot(account="Individual - TOD Test", symbol="G", quantity=3.0, current_value=2000.0,
+                   gain_loss=500.0, date_acquired="2024-01-01", term="Long-Term",
+                   cost_basis_total=1500.0, gain_loss_pct=33.3)
+        self.assertEqual(len(tt.gift_candidates([gain], self.AS_OF)[0]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

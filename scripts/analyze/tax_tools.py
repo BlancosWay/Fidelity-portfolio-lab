@@ -142,12 +142,22 @@ def price_dispersion_flags(lots, tol=0.02):
     return flags
 
 
+def _live_quantity(lot):
+    """A lot is a LIVE (open) position only when its quantity parses to a strictly positive number.
+    Zero/negative/blank/non-numeric quantities are closed or unparseable lots, so the live-position
+    analyses (harvest candidates, liquidation, unrealized-by-account) skip them."""
+    try:
+        return float(lot.get("quantity")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def taxable_loss_candidates(lots):
-    """Lots eligible for tax-loss harvesting: taxable account, unrealized loss (gain_loss < 0),
-    excluding cash rows. Returned in input order (callers sort)."""
+    """Lots eligible for tax-loss harvesting: taxable account, LIVE (quantity > 0) position, unrealized
+    loss (gain_loss < 0), excluding cash rows. Returned in input order (callers sort)."""
     out = []
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         gl = lot.get("gain_loss")
         try:
@@ -217,7 +227,7 @@ def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, of
 
 
 def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
-    """Taxable short-term lots and the date each becomes long-term.
+    """Taxable, LIVE (quantity > 0) short-term lots and the date each becomes long-term.
 
     ``ripens_on`` is the first long-term day = one-year anniversary + 1 day (reusing the Feb-29 clamp).
     Winners (gain > 0) show the estimated tax saved by waiting ``gain*(st_rate-lt_rate)``; losers
@@ -225,7 +235,7 @@ def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
     ``within`` filters to lots ripening within N days. Sorted by ``ripens_on`` ascending."""
     rows = []
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         acq = lot_acquired_date(lot)
         if acq is None or holding_term(acq, as_of) != "Short-Term":
@@ -263,13 +273,20 @@ def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
 
 
 def concentration(lots, top=10, threshold=0.05):
-    """Aggregate current market value by symbol across ALL accounts.
+    """Aggregate current market value by symbol across ALL accounts (single-name equity concentration).
 
-    Cash rows are excluded from the single-name statistics but reported separately. Weights are the
-    fraction of INVESTED (non-cash) value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards
-    the all-cash / zero-invested case (empty rankings, HHI 0, effective positions None, cash 100%)."""
+    Cash rows are excluded from the single-name statistics but reported separately. **Options are
+    excluded** from the equity ranking -- a lot's ``current_value`` is the option *premium*, not the
+    notional exposure, so ranking it as an equity position is misleading (use the ``options`` command);
+    the number of option lots dropped is reported as ``n_options_excluded``. Symbols whose **aggregated
+    value is non-positive** (a short position or a corrupt/negative scrape) are excluded from the ranking
+    and from invested so a single bad value cannot collapse the whole report; the count is reported as
+    ``n_nonpositive_excluded``. Weights are the fraction of INVESTED (non-cash, non-option, positive)
+    value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards the all-cash / zero-invested case
+    (empty rankings, HHI 0, effective positions None, cash 100%)."""
     by_symbol = {}
     cash_total = 0.0
+    n_options_excluded = 0
     for lot in lots:
         try:
             cv = float(lot.get("current_value"))
@@ -279,11 +296,16 @@ def concentration(lots, top=10, threshold=0.05):
             cash_total += cv
             continue
         sym = (lot.get("symbol") or "").strip()
-        s = by_symbol.setdefault(sym, {"symbol": sym, "value": 0.0, "accounts": set(),
-                                       "is_option": security_key(sym)["kind"] == "option"})
+        if security_key(sym)["kind"] == "option":
+            n_options_excluded += 1        # premium != notional exposure; see the `options` command
+            continue
+        s = by_symbol.setdefault(sym, {"symbol": sym, "value": 0.0, "accounts": set()})
         s["value"] += cv
         s["accounts"].add(lot.get("account"))
-    invested = sum(s["value"] for s in by_symbol.values())
+    # Drop symbols whose aggregated value is non-positive (short/corrupt) so `invested` can't collapse.
+    positive = {sym: s for sym, s in by_symbol.items() if s["value"] > 0}
+    n_nonpositive_excluded = len(by_symbol) - len(positive)
+    invested = sum(s["value"] for s in positive.values())
     total = invested + cash_total
     if invested <= 0:  # all-cash / zero-invested guard: empty rankings, HHI 0, effective N/A
         return [], {
@@ -296,16 +318,18 @@ def concentration(lots, top=10, threshold=0.05):
             "effective_positions": None,
             "over_threshold": [],
             "threshold": threshold,
+            "n_options_excluded": n_options_excluded,
+            "n_nonpositive_excluded": n_nonpositive_excluded,
         }
     rows = []
-    for s in by_symbol.values():
+    for s in positive.values():
         w = s["value"] / invested
         rows.append({
             "symbol": s["symbol"],
             "value": s["value"],
             "weight": w,
             "accounts": len(s["accounts"]),
-            "is_option": s["is_option"],
+            "is_option": False,   # options are excluded from the ranking; kept for backward compatibility
             "over_threshold": w > threshold,
         })
     rows.sort(key=lambda r: -r["value"])
@@ -324,6 +348,8 @@ def concentration(lots, top=10, threshold=0.05):
         "effective_positions": (1.0 / hhi) if hhi > 0 else None,
         "over_threshold": [r["symbol"] for r in rows if r["over_threshold"]],
         "threshold": threshold,
+        "n_options_excluded": n_options_excluded,
+        "n_nonpositive_excluded": n_nonpositive_excluded,
     }
     return rows, summary
 
@@ -639,15 +665,15 @@ def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
     """Appreciated-lot donor picker (informational, NOT tax advice).
 
     Donating an appreciated LONG-TERM security avoids the capital-gains tax and (if you itemize)
-    deducts fair market value. Surfaces the best taxable long-term gain lots to donate, ranked by
-    gain% (most-appreciated first); short-term-gain and loss lots are counted separately and steered
-    elsewhere (wait for long-term / harvest instead). ``min_gain_pct`` is a PERCENT number (20 == 20%).
-    A positive ``min_gain_pct`` requires a computable gain%; at the default 0 a positive gain suffices.
-    Returns ``(rows, summary)``."""
+    deducts fair market value. Surfaces the best taxable, LIVE (quantity > 0) long-term gain lots to
+    donate, ranked by gain% (most-appreciated first); short-term-gain and loss lots are counted
+    separately and steered elsewhere (wait for long-term / harvest instead). ``min_gain_pct`` is a
+    PERCENT number (20 == 20%). A positive ``min_gain_pct`` requires a computable gain%; at the default
+    0 a positive gain suffices. Returns ``(rows, summary)``."""
     acct = (account or "").lower()
     rows, n_short_term_gain, n_loss = [], 0, 0
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         if security_key(lot.get("symbol"))["kind"] == "option":
             continue
@@ -706,15 +732,83 @@ def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
     return rows, summary
 
 
+def holdings_overview(lots, as_of):
+    """Portfolio holdings aggregations with the holding **term recomputed as of ``as_of``** (the DB
+    does not persist ``load``'s as-of, so the stored ``term`` can be stale). Pure function over the
+    lot dicts; mirrors the three ``summary`` tables exactly:
+
+      * ``by_symbol``   -- every lot grouped by symbol (**cash included**): total units, lot count,
+                           distinct-account count, and the long/short unit split (cash, whose
+                           recomputed term is blank, contributes 0 to the split).
+      * ``term_totals`` -- lot count and market value for Long-Term vs Short-Term **only** (cash is
+                           excluded here -- and ONLY here -- because its term is blank).
+      * ``by_account``  -- every lot grouped by account (**cash included in market value**): long/short
+                           lot counts and total market value.
+
+    All figures are informational, NOT tax advice."""
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return 0.0
+
+    by_symbol, by_account, term_totals = {}, {}, {}
+    for lot in lots:
+        sym = (lot.get("symbol") or "").strip()
+        acct = (lot.get("account") or "").strip()
+        term = recompute_term(lot, as_of)
+        qty = _num(lot.get("quantity"))
+        val = _num(lot.get("current_value"))
+
+        s = by_symbol.setdefault(sym, {"symbol": sym, "units": 0.0, "lots": 0,
+                                       "accounts": set(), "long_units": 0.0, "short_units": 0.0})
+        s["units"] += qty
+        s["lots"] += 1
+        s["accounts"].add(acct)
+        if term == "Long-Term":
+            s["long_units"] += qty
+        elif term == "Short-Term":
+            s["short_units"] += qty
+
+        a = by_account.setdefault(acct, {"account": acct, "long_lots": 0, "short_lots": 0,
+                                         "market_value": 0.0})
+        a["market_value"] += val
+        if term == "Long-Term":
+            a["long_lots"] += 1
+        elif term == "Short-Term":
+            a["short_lots"] += 1
+
+        if term in ("Long-Term", "Short-Term"):
+            t = term_totals.setdefault(term, {"term": term, "lots": 0, "market_value": 0.0})
+            t["lots"] += 1
+            t["market_value"] += val
+
+    by_symbol_rows = [{
+        "symbol": by_symbol[k]["symbol"], "units": round(by_symbol[k]["units"], 4),
+        "lots": by_symbol[k]["lots"], "accts": len(by_symbol[k]["accounts"]),
+        "long_units": round(by_symbol[k]["long_units"], 4),
+        "short_units": round(by_symbol[k]["short_units"], 4),
+    } for k in sorted(by_symbol)]
+    term_rows = [{
+        "term": term_totals[k]["term"], "lots": term_totals[k]["lots"],
+        "market_value": round(term_totals[k]["market_value"], 2),
+    } for k in sorted(term_totals)]
+    account_rows = [{
+        "account": by_account[k]["account"], "long_lots": by_account[k]["long_lots"],
+        "short_lots": by_account[k]["short_lots"], "market_value": round(by_account[k]["market_value"], 2),
+    } for k in sorted(by_account)]
+    return {"by_symbol": by_symbol_rows, "term_totals": term_rows, "by_account": account_rows}
+
+
 def unrealized_by_account(lots, as_of):
     """Per-account unrealized gain/loss split short-term vs long-term (informational, NOT tax advice).
 
-    Non-cash lots with a numeric ``gain_loss``; term via ``recompute_term`` (not the stale stored
-    term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl, total_gl,
-    market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
+    Non-cash LIVE lots (quantity > 0) with a numeric ``gain_loss``; term via ``recompute_term`` (not the
+    stale stored term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl,
+    total_gl, market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
     by = {}
     for lot in lots:
-        if is_cash(lot):
+        if is_cash(lot) or not _live_quantity(lot):
             continue
         try:
             gl = float(lot.get("gain_loss"))
@@ -771,13 +865,14 @@ def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15):
 def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
     """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
 
-    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable
-    accounts, then nets them via ``_net_capital_tax``: a net gain is taxed (never negative), a net
-    loss yields a benefit capped at the $3,000 ordinary-income offset plus a carryforward."""
+    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable,
+    LIVE (quantity > 0) lots, then nets them via ``_net_capital_tax``: a net gain is taxed (never
+    negative), a net loss yields a benefit capped at the $3,000 ordinary-income offset plus a
+    carryforward."""
     st_gain = lt_gain = 0.0
     n_lots = 0
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         try:
             gl = float(lot.get("gain_loss"))

@@ -133,6 +133,37 @@ class ConcentrationCliTests(unittest.TestCase):
         self.assertIn("Invested (non-cash)", text)
         self.assertIn("HHI", text)
 
+    def test_option_exclusion_note_in_table_branch(self):
+        # An equity plus an option: the equity ranks, the option is excluded with a NOTE (Bug 6).
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jan-05-2024",
+                 "$100.00", "$1,000.00", "$5,000.00", "+$4,000.00", "+400.00%"),
+            _row("Individual - TOD Test", "AAPL 250 Call", 2, "Jan-05-2026",
+                 "$3.00", "$600.00", "$1,000.00", "+$400.00", "+66.67%", desc="Jul-17-2026"),
+        ])
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("option lot(s) excluded", text)      # NOTE printed alongside the table
+        self.assertNotIn("AAPL 250 Call", text)            # the option is not a ranked row
+
+    def test_exclusion_notes_in_empty_branch(self):
+        # When every non-cash equity is excluded (here: only an option), the empty-rows branch must
+        # STILL print the exclusion note (Bug 6 -- notes in both branches).
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL 250 Call", 2, "Jan-05-2026",
+                 "$3.00", "$600.00", "$1,000.00", "+$400.00", "+66.67%", desc="Jul-17-2026"),
+            _row("Individual - TOD Test", "CASH", "", "", "", "", "$500.00", "", "",
+                 desc="Cash HELD IN MONEY MARKET", mc=""),
+        ])
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("No non-cash equity positions", text)   # empty-rows branch
+        self.assertIn("option lot(s) excluded", text)         # note still shown
+
 
 SELL_ROWS = [
     _row("Individual - TOD Test", "MULTI", 10, "Jan-05-2026", "$12.00", "$120.00", "$100.00", "-$20.00", "-16.67%"),
@@ -420,6 +451,225 @@ class ExpirationCliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             portfolio.main(["expiration", "--help"])
         self.assertEqual(cm.exception.code, 0)
+
+
+class Tier2ReproCliTests(unittest.TestCase):
+    """Reproduce Bug 8 (read-only + friendly errors) and Bug 5 at the report level. Currently FAIL."""
+
+    def _missing_db_path(self):
+        fd, p = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(p)   # a path that does NOT exist
+        return p
+
+    def test_bug5_summary_recomputes_term_as_of(self):
+        # A lot stored Short-Term (loaded as-of 2026-07-01) must display Long-Term when summary is run
+        # with a later --as-of. The current summary(db) has no as-of and shows the stale stored term.
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),   # stored Short-Term
+        ])
+        try:
+            text = run(portfolio.summary, db, dt.date(2027, 8, 1))   # >1yr later -> Long-Term
+        finally:
+            os.unlink(db)
+        self.assertIn("Long-Term", text)        # recomputed to long as of 2027
+        self.assertNotIn("Short-Term", text)    # no longer bucketed short
+
+    def test_bug8_reports_do_not_create_db(self):
+        # summary/symbol/accounts must be strictly read-only: a missing DB must not be created.
+        p = self._missing_db_path()
+        try:
+            run(portfolio.accounts_list, p)
+        except Exception:
+            pass   # a raise is acceptable here; the bug is the 0-byte FILE creation
+        created = os.path.exists(p)
+        try:
+            os.unlink(p)   # best-effort; a leaked read-write handle may keep it locked on Windows
+        except OSError:
+            pass
+        self.assertFalse(created, "accounts_list must not create the DB file")
+
+    def test_bug8_missing_db_friendly_message(self):
+        # An analysis command on a never-loaded DB must print a friendly hint, not raise a traceback.
+        p = self._missing_db_path()
+        try:
+            text = run(portfolio.cmd_harvest, p, AS_OF, 0.32, 0.15)
+        finally:
+            if os.path.exists(p):
+                os.unlink(p)
+        self.assertIn("load", text.lower())
+
+
+class DbReadonlyGuardTests(unittest.TestCase):
+    """Node db-readonly-guard (Bug 8): every consumer must guard a missing/unloaded DB with a
+    friendly hint and never create a file. Extends the two carried Tier2ReproCliTests repros to
+    the remaining converted commands and the main() query branch."""
+
+    def _missing_db_path(self):
+        fd, p = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(p)   # a path that does NOT exist
+        return p
+
+    def test_query_missing_db_returns_1_and_creates_no_file(self):
+        p = self._missing_db_path()
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = portfolio.main(["--db", p, "query", "SELECT 1 AS x"])
+            self.assertEqual(rc, 1)                       # non-zero exit on missing DB
+            self.assertIn("load", out.getvalue().lower())  # friendly hint, not a traceback
+            self.assertFalse(os.path.exists(p), "query must not create the DB file")
+        finally:
+            if os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    def test_converted_commands_hint_on_missing_db(self):
+        # Each analysis command converted to read_lots must print a load hint and not raise.
+        cases = [
+            (portfolio.cmd_options, (AS_OF, None, 10)),
+            (portfolio.cmd_expiration, (AS_OF, 60, None, 10)),
+            (portfolio.cmd_capacity, (100000.0, None, "0% LTCG", None, None, AS_OF, 0.15, 0.0)),
+            (portfolio.cmd_gift, (0.0, 10, None, AS_OF, 0.15)),
+            (portfolio.cmd_dashboard, (AS_OF, 0.32, 0.15, 60, 100000.0, None)),
+        ]
+        for fn, extra in cases:
+            p = self._missing_db_path()
+            try:
+                text = run(fn, p, *extra)
+                self.assertIn("load", text.lower(), f"{fn.__name__} should print a load hint")
+                self.assertFalse(os.path.exists(p), f"{fn.__name__} must not create the DB file")
+            finally:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+    def test_loaded_then_deleted_db_hint(self):
+        # A DB that was loaded once but later removed must degrade to the friendly hint, not a crash.
+        db = build_db(SAMPLE_ROWS)
+        os.unlink(db)
+        text = run(portfolio.cmd_dashboard, db, AS_OF, 0.32, 0.15, 60, 100000.0, None)
+        self.assertIn("load", text.lower())
+        if os.path.exists(db):
+            try:
+                os.unlink(db)
+            except OSError:
+                pass
+
+    def test_query_bad_column_surfaces_real_error_not_load_hint(self):
+        # A genuine SQL error on a LOADED DB must surface the real sqlite error, not the misleading
+        # "No portfolio loaded" hint (regression: run_query previously swallowed all OperationalErrors).
+        db = build_db(SAMPLE_ROWS)
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = portfolio.main(["--db", db, "query", "SELECT no_such_column FROM lots"])
+            text = out.getvalue().lower()
+            self.assertEqual(rc, 1)                              # bad query still exits non-zero
+            self.assertNotIn("no portfolio loaded", text)        # NOT the unloaded-DB hint
+            self.assertIn("no such column", text)                # the actual sqlite error is shown
+        finally:
+            os.unlink(db)
+
+    def test_query_other_missing_table_is_real_error_not_load_hint(self):
+        # Exact-match guard: a missing table whose name merely starts with 'lots' (e.g. 'lots2') on a
+        # LOADED DB is a genuine query error, not the unloaded-portfolio case.
+        db = build_db(SAMPLE_ROWS)
+        try:
+            for q in ("SELECT * FROM lots2", "SELECT * FROM othertable"):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = portfolio.main(["--db", db, "query", q])
+                text = out.getvalue().lower()
+                self.assertEqual(rc, 1, q)
+                self.assertNotIn("no portfolio loaded", text, q)   # not the load hint
+                self.assertIn("no such table", text, q)            # the actual sqlite error
+        finally:
+            os.unlink(db)
+
+    def test_query_missing_lots_table_shows_load_hint(self):
+        # A DB file that exists but was never loaded (no 'lots' table) must map to the load hint.
+        fd, db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        conn = sqlite3.connect(db)   # create an empty DB with NO lots table
+        conn.close()
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = portfolio.main(["--db", db, "query", "SELECT * FROM lots"])
+            text = out.getvalue().lower()
+            self.assertEqual(rc, 1)
+            self.assertIn("no portfolio loaded", text)
+        finally:
+            os.unlink(db)
+
+
+class Bug5ReportTests(unittest.TestCase):
+    """Node reports-fresh-term (Bug 5): summary/symbol recompute holding term as of --as-of, stay
+    read-only (closing the Bug-8 gap deferred from node 1), and preserve cash in the right places."""
+
+    def _missing_db_path(self):
+        fd, p = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        os.unlink(p)
+        return p
+
+    def test_summary_and_symbol_are_readonly_missing_db(self):
+        for fn, extra in ((portfolio.summary, ()), (portfolio.symbol_detail, ("AAPL",))):
+            p = self._missing_db_path()
+            try:
+                text = run(fn, p, *extra)
+                self.assertIn("load", text.lower(), f"{fn.__name__} should print a load hint")
+                self.assertFalse(os.path.exists(p), f"{fn.__name__} must not create the DB file")
+            finally:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+    def test_summary_preserves_cash_in_symbol_and_account_value(self):
+        db = build_db(SAMPLE_ROWS)
+        try:
+            text = run(portfolio.summary, db, AS_OF)
+        finally:
+            os.unlink(db)
+        self.assertIn("CASH", text)     # cash shown as a per-symbol row
+        self.assertIn("2510", text)     # TOD account market value 900+850+260+500 includes the $500 cash
+
+    def test_summary_recomputes_term_as_of_later_date(self):
+        # A lot stored Short-Term becomes Long-Term when summary is run with a later --as-of.
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+        ])
+        try:
+            early = run(portfolio.summary, db, dt.date(2026, 8, 1))    # <1yr -> Short-Term
+            late = run(portfolio.summary, db, dt.date(2027, 8, 1))     # >1yr -> Long-Term
+        finally:
+            os.unlink(db)
+        self.assertIn("Short-Term", early)
+        self.assertNotIn("Long-Term", early)
+        self.assertIn("Long-Term", late)
+        self.assertNotIn("Short-Term", late)
+
+    def test_symbol_recomputes_term_as_of_later_date(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+        ])
+        try:
+            late = run(portfolio.symbol_detail, db, "AAPL", dt.date(2027, 8, 1))
+        finally:
+            os.unlink(db)
+        self.assertIn("Long-Term", late)
+        self.assertIn("10.0 long", late)     # totals reflect the recomputed long term
 
 
 if __name__ == "__main__":

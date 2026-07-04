@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
+  or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable
+  loss, as taxable in the "if sold now" liquidation estimate, in per-account unrealized gain/loss, in
+  `ripening` ("harvest before it ripens"), and as a `gift` donation candidate. `harvest` (via
+  `taxable_loss_candidates`), `liquidation_estimate`, `unrealized_by_account`, `ripening`, and `gift`
+  now skip any lot whose quantity is not a strictly positive number (blank/non-numeric quantities are
+  treated as not-live), so only open positions are analyzed.
+- **`concentration` excludes options and non-positive-value symbols from the equity ranking.** An
+  option lot's `current_value` is the premium, not the notional exposure, so ranking it as a single-name
+  equity position overstated diversification risk; options are now dropped from the ranking (count noted,
+  pointing to the `options` command). A symbol whose aggregated value is non-positive (a short position
+  or a corrupt/negative scraped value) is also excluded so a single bad value can no longer make total
+  invested `<= 0` and collapse the whole report to "no positions"; both exclusion counts are printed in
+  the populated and the empty output.
+- **`summary` and `symbol` now recompute the holding term as of a date and are read-only.** The DB
+  stores the Long/Short term computed at `load` time, so after a lot crossed its one-year mark the
+  reports still showed it as short-term. Both commands now recompute each lot's term from its
+  acquisition date (new pure `holdings_overview` helper) and accept `--as-of YYYY-MM-DD` (default
+  today); they also open the DB read-only via the same missing-portfolio guard as the other commands.
+  Cash is still shown per symbol and counted in each account's market value — it is excluded only from
+  the Long/Short term split, exactly as before.
+- **Analysis commands are strictly read-only and fail gracefully on a missing portfolio.** Running any
+  command against a never-loaded (or since-deleted) DB previously either created a 0-byte SQLite file
+  or raised a raw `sqlite3` traceback. Every command now opens the DB read-only, and on a missing file
+  or missing `lots` table prints a one-line hint (`No portfolio loaded at <db>. Run: ... load <lots.csv>`)
+  and exits without creating anything. `query` returns a non-zero exit code in that case.
 - **`sell` and `harvest` now warn on inconsistent per-share prices.** The browser export can carry
   different `current_value/quantity` across lots of the same symbol (a scrape corruption); the tax
   tools previously trusted these silently and could surface a phantom loss. A new detector flags any

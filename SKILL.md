@@ -53,13 +53,19 @@ python scripts/analyze/portfolio.py load path/to/fidelity_lots.csv
 ### 3. Analyze
 ```
 python scripts/analyze/portfolio.py summary       # units/symbol across accounts; long vs short; per account
-python scripts/analyze/portfolio.py symbol AAPL   # per-lot detail + totals for one symbol
+python scripts/analyze/portfolio.py summary --as-of 2027-01-01   # recompute holding term as of a date
+python scripts/analyze/portfolio.py symbol AAPL   # per-lot detail + totals for one symbol (--as-of too)
 python scripts/analyze/portfolio.py accounts      # accounts overview
 python scripts/analyze/portfolio.py query "SELECT symbol, ROUND(SUM(quantity),4) FROM lots GROUP BY symbol ORDER BY 2 DESC"
 ```
 Use **`query`** for any ad-hoc question the user asks — it is **read-only** (opens the DB
 `mode=ro` + `PRAGMA query_only`, accepts a single `SELECT`/`WITH` statement only). Translate the
-user's question into SQL over the `lots` table.
+user's question into SQL over the `lots` table. Every command opens the DB read-only and never
+creates a file: run before any `load` (or against a deleted DB) and it prints
+`No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (no traceback, no 0-byte DB).
+`summary`/`symbol` recompute each lot's Long/Short term from its acquisition date as of `--as-of`
+(default today), so classifications stay correct as lots cross one year; cash is shown per symbol
+and in each account's market value but is excluded from the Long/Short split.
 
 ### 4. Tax / portfolio tools (Tier-1)
 All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
@@ -83,7 +89,10 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
 - **`ripening`** — taxable short-term lots and the exact date each becomes long-term; flags short-term
   *losers* to harvest before they ripen.
 - **`concentration`** — aggregates value by symbol across all accounts (cash reported separately);
-  Herfindahl index + single-name flags (`--threshold`, default `0.05`).
+  Herfindahl index + single-name flags (`--threshold`, default `0.05`). Options are excluded from the
+  equity ranking (their value is premium, not notional -- use `options`) and symbols whose aggregated
+  value is non-positive (a short or a corrupt scrape) are excluded so they can't collapse the report;
+  both exclusion counts are noted.
 - **`sell SYMBOL SHARES`** — picks the specific **taxable** lots to sell to minimize tax and prints the
   specific-ID instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
   Tax-advantaged lots (IRA/Roth/HSA/BrokerageLink/529) are excluded (their gains are tax-free), and a
