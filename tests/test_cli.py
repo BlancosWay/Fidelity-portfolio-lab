@@ -195,5 +195,35 @@ class WashSaleCliTests(unittest.TestCase):
         self.assertIn("CAUTION (replacement buy in a taxable account): 1", caution)
 
 
+class CapacityCliTests(unittest.TestCase):
+    LT_GAIN = _row("Individual - TOD Test", "GAINX", 100, "Jan-05-2024",
+                   "$20.00", "$2,000.00", "$10,000.00", "+$8,000.00", "+400.00%")
+
+    def test_headroom_output(self):
+        db = build_db([self.LT_GAIN])
+        try:
+            text = run(portfolio.cmd_capacity, db, 40000.0, 50000.0, "0% LTCG", None, None, AS_OF, 0.15, 0.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("headroom", text)
+        self.assertIn("GAINX", text)
+        self.assertIn("not tax advice", text)
+
+    def test_target_gain_output(self):
+        db = build_db([self.LT_GAIN])
+        try:
+            text = run(portfolio.cmd_capacity, db, None, None, "0% LTCG", 5000.0, None, AS_OF, 0.15, 0.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("Target realized gain", text)
+
+    def test_help_does_not_crash(self):
+        # argparse %-formats help text, so a bare % in any help string raises ValueError at --help time.
+        for argv in (["--help"], ["capacity", "--help"]):
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                portfolio.main(argv)
+            self.assertEqual(cm.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

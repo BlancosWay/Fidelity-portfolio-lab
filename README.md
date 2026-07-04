@@ -58,6 +58,7 @@ Real data:
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
 | `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`). |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
+| `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
@@ -74,6 +75,12 @@ Real data:
 > **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 buy (no IRS guidance; prevailing view is the rule
 > does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
 > within N days" reminder and a ±`--window` audit of past sells.
+>
+> `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
+> to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income
+> ceiling you supply. `--within-rate` (default `0.0`) is the marginal LTCG rate on gains realized
+> below the ceiling: `0.0` models the **0% long-term bracket** (tax-free); pass your real LTCG rate
+> for an **NIIT/IRMAA** ceiling, which only avoids the surcharge/tier while the gain is still taxed.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

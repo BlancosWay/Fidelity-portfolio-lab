@@ -450,5 +450,78 @@ class WashCategoryTests(unittest.TestCase):
         self.assertEqual(tt.WASH_SEVERITY["taxable"], "CAUTION")
 
 
+class CapacityTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def lt_gain(self, symbol, gain, pct=100.0, account="Individual - TOD Test", qty=100.0):
+        """A synthetic taxable LONG-TERM gain lot (acquired > 1yr before AS_OF)."""
+        value = 2000.0 + gain
+        return lot(account=account, symbol=symbol, quantity=qty, current_value=value,
+                   gain_loss=float(gain), date_acquired="2024-01-15", term="Long-Term",
+                   cost_basis_total=value - gain, avg_cost_basis=(value - gain) / qty, gain_loss_pct=pct)
+
+    def test_headroom_budget_partial_fill(self):
+        lots = [self.lt_gain("GAINA", 8000, pct=400.0), self.lt_gain("GAINB", 5000, pct=100.0)]
+        picks, s = tt.gain_capacity(lots, self.AS_OF, income=40000, ceiling=50000)
+        self.assertEqual(s["source"], "headroom")
+        self.assertEqual(s["budget"], 10000)
+        self.assertAlmostEqual(s["realized"], 10000)
+        self.assertEqual(s["constrained_by"], "budget")
+        self.assertAlmostEqual(s["est_tax"], 0.0)              # default within_rate 0.0 (0% LTCG)
+        self.assertAlmostEqual(s["remaining_budget"], 0.0)
+        self.assertEqual(len(picks), 2)
+        self.assertFalse(picks[0]["partial"])                  # GAINA (biggest gain) whole
+        self.assertTrue(picks[1]["partial"])                   # GAINB partial
+        self.assertAlmostEqual(picks[1]["gain_used"], 2000.0)
+        self.assertAlmostEqual(picks[1]["qty_used"], 40.0)     # 100 * (2000/5000)
+
+    def test_within_rate_taxes_the_gain(self):
+        lots = [self.lt_gain("GAINA", 8000), self.lt_gain("GAINB", 5000)]
+        _, s = tt.gain_capacity(lots, self.AS_OF, income=40000, ceiling=50000, within_rate=0.15)
+        self.assertAlmostEqual(s["est_tax"], 10000 * 0.15)     # NIIT/IRMAA ceiling: gain still taxed
+
+    def test_inventory_constrained(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, income=30000, ceiling=50000)
+        self.assertAlmostEqual(s["realized"], 8000)
+        self.assertEqual(s["constrained_by"], "inventory")
+        self.assertAlmostEqual(s["leftover_gain"], 0.0)
+        self.assertAlmostEqual(s["remaining_budget"], 12000)
+
+    def test_target_gain_mode(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, target_gain=5000)
+        self.assertEqual(s["source"], "target-gain")
+        self.assertAlmostEqual(s["realized"], 5000)
+        self.assertTrue(picks[0]["partial"])
+        self.assertAlmostEqual(s["est_tax"], 5000 * 0.15)
+
+    def test_excludes_non_candidates(self):
+        lots = [
+            self.lt_gain("GAINA", 8000),                                                  # candidate
+            lot(symbol="STGAIN", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000.0, current_value=1500.0, gain_loss=500.0, gain_loss_pct=50.0),
+            lot(symbol="LTLOSS", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=2000.0, current_value=1000.0, gain_loss=-1000.0, gain_loss_pct=-50.0),
+            self.lt_gain("OPTX 30 Call", 3000),                                           # option
+            self.lt_gain("IRAG", 4000, account="Roth IRA Test"),                          # tax-advantaged
+        ]
+        _, s = tt.gain_capacity(lots, self.AS_OF, income=0, ceiling=100000)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertAlmostEqual(s["available_gain"], 8000)
+
+    def test_inventory_only(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000), self.lt_gain("GAINB", 5000)], self.AS_OF)
+        self.assertEqual(picks, [])
+        self.assertEqual(s["source"], "inventory-only")
+        self.assertAlmostEqual(s["available_gain"], 13000)
+        self.assertIsNone(s["est_tax"])
+
+    def test_above_ceiling(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, income=60000, ceiling=50000)
+        self.assertEqual(picks, [])
+        self.assertTrue(s["above_ceiling"])
+        self.assertAlmostEqual(s["realized"], 0.0)
+        self.assertEqual(s["budget"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
