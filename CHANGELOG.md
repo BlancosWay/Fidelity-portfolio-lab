@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **`sell` and `harvest` now warn on inconsistent per-share prices.** The browser export can carry
+  different `current_value/quantity` across lots of the same symbol (a scrape corruption); the tax
+  tools previously trusted these silently and could surface a phantom loss. A new detector flags any
+  symbol whose per-share price disagrees across its lots, and `sell`/`harvest` print a warning to
+  verify before acting (the numbers themselves are unchanged).
+- **`options`/`expiration` no longer count already-expired contracts as live.** Options whose expiry
+  is before the as-of date are excluded from `options` exposure (premium/notional/bias/coverage; the
+  count of excluded lots is noted), and from `expiration`'s live/soon/assignment metrics and
+  `nearest`-expiry (expired rows are still listed with a separate `expired` count so nothing is hidden).
+- **`harvest` benefit and `dashboard` "If sold now" now model capital-loss netting + the $3,000 cap.**
+  Previously each tax figure applied the ST/LT rate to that bucket's signed total independently, so a
+  net capital loss could print a large negative "tax" (a fake refund) and the harvest benefit ignored
+  that a net loss only offsets $3,000 of ordinary income per year. Both now net short-term against
+  long-term first, cap a residual net loss at the $3,000 ordinary-income offset (labeling the rest a
+  carryforward), and never report a negative tax on a net gain. `harvest` gains `--offsetting-st-gains`
+  / `--offsetting-lt-gains` so harvested losses can be valued against known realized gains. Estimates
+  only, not tax advice.
+- **`sell` no longer operates on tax-advantaged accounts.** Lot selection (`hifo`/`fifo`/`loss-first`/
+  `min-tax`) now excludes IRA/Roth/HSA/BrokerageLink/529 lots — their gains are tax-free, so the tool
+  never recommends selling a retirement lot or charges phantom capital-gains tax on one. A pick that
+  spans multiple accounts prints a per-account NOTE (specific-ID sales are one order per account).
+
 ### Added
 - **Tier-3 options tools** — new read-only `portfolio.py` subcommands (stdlib only; informational, not
   investment advice):

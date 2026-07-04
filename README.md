@@ -53,15 +53,15 @@ Real data:
 | `symbol <SYM>` | Per-lot detail + totals for one symbol. |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
-| `harvest [--as-of D] [--st-rate R] [--lt-rate R]` | Tax-loss harvest candidates (taxable accounts, short-term first). |
+| `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + $3k cap. |
 | `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
-| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`). |
+| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded. |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
 | `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
-| `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked. |
+| `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked (expired excluded). |
 | `expiration [--within N] [--account A] [--as-of D] [--top N]` | Option expiration & assignment calendar: days-to-expiry, premium at risk by expiry, moneyness, short-put assignment cash. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),

@@ -80,9 +80,32 @@ class HarvestCliTests(unittest.TestCase):
         self.assertNotIn("GAINC", text)   # a gain is not harvestable
         self.assertNotIn("LOSSD", text)   # Roth IRA excluded
         self.assertLess(text.index("LOSSA"), text.index("LOSSB"))  # short-term first
-        # estimated benefit = 200*0.32 + 150*0.15 = 86.50
-        self.assertIn("86.50", text)
+        # No offsetting gains: the -350 net loss (200 ST + 150 LT) deducts against ordinary income
+        # (under the $3k cap) at the ordinary rate -> 350 * 0.32 = 112.00.
+        self.assertIn("112.00", text)
         self.assertIn("not tax advice", text)
+
+    def test_offsetting_lt_gains_uses_lt_rate(self):
+        db = build_db(SAMPLE_ROWS)
+        try:                                            # 150 LT loss offsets an LT gain -> lt_rate
+            text = run(portfolio.cmd_harvest, db, AS_OF, 0.32, 0.15, 0.0, 100000.0)
+        finally:
+            os.unlink(db)
+        # ST loss 200 offsets LT gain at lt_rate too here (net gain path); benefit = 350*0.15 = 52.50
+        self.assertIn("52.50", text)
+        self.assertIn("not tax advice", text)
+
+    def test_price_dispersion_warning_case_insensitive(self):
+        # A lowercase-symbol loss lot with inconsistent per-share prices must still warn.
+        db = build_db([
+            _row("Individual - TOD Test", "disp", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$100.00", "-$900.00", "-90.00%"),
+            _row("Individual - TOD Test", "disp", 5, "Jan-05-2024", "$100.00", "$500.00", "$500.00", "$0.00", "0.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_harvest, db, AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("inconsistent per-share prices", text)
 
 
 class RipeningCliTests(unittest.TestCase):
@@ -129,6 +152,37 @@ class SellCliTests(unittest.TestCase):
         self.assertIn("Individual - TOD Test", text)
         self.assertIn("vs FIFO", text)
         self.assertIn("not tax advice", text)
+
+    def test_excludes_tax_advantaged_and_flags_multi_account(self):
+        db = build_db([
+            _row("Individual - TOD Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+            _row("Joint Brokerage Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+            _row("Roth IRA Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "SHR", 20, None, "fifo", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertNotIn("Roth IRA Test", text)                 # tax-advantaged lot excluded
+        self.assertIn("per-account", text)                      # multi-account NOTE
+        self.assertIn("not tax advice", text)
+
+    def test_sell_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["sell", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_price_dispersion_warning(self):
+        # Same symbol, inconsistent per-share (scrape corruption): $200/sh vs $10/sh.
+        db = build_db([
+            _row("Individual - TOD Test", "DISP", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+            _row("Individual - TOD Test", "DISP", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$100.00", "-$900.00", "-90.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "DISP", 10, None, "loss-first", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("inconsistent per-share prices", text)
 
 
 HIST_HEADER = ("Run Date,Account,Account Number,Action,Symbol,Description,Type,Exchange Quantity,"
@@ -318,6 +372,22 @@ class OptionsCliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             portfolio.main(["options", "--help"])
         self.assertEqual(cm.exception.code, 0)
+
+    def test_expired_excluded_note(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAL", 100, "Jan-05-2024",
+                 "$13.00", "$1,300.00", "$1,300.00", "$0.00", "0.00%"),
+            _row("Individual - TOD Test", "AAL 10 Call", 2, "Mar-01-2026",
+                 "$3.00", "$500.00", "$600.00", "+$100.00", "+20.00%", desc="Jul-17-2026"),   # live
+            _row("Individual - TOD Test", "XYZ 100 Call", 3, "Mar-01-2025",
+                 "$1.00", "$300.00", "$300.00", "$0.00", "0.00%", desc="Jan-16-2026"),         # expired
+        ])
+        try:
+            text = run(portfolio.cmd_options, db, AS_OF, None, 20)
+        finally:
+            os.unlink(db)
+        self.assertIn("expired option lot(s) excluded", text)
+        self.assertNotIn("XYZ", text)
 
 
 class ExpirationCliTests(unittest.TestCase):

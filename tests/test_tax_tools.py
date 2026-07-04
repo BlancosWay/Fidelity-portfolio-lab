@@ -114,8 +114,26 @@ class HarvestTests(unittest.TestCase):
         self.assertAlmostEqual(s["st_loss"], -550.0)
         self.assertAlmostEqual(s["lt_loss"], -300.0)
         self.assertEqual((s["st_lots"], s["lt_lots"]), (2, 1))
-        self.assertAlmostEqual(s["est_benefit"], 550 * 0.30 + 300 * 0.20)  # positive avoided tax
+        # No offsetting gains -> the whole -850 net loss deducts against ordinary income (under the
+        # $3k cap) at the ordinary/ST rate: 850 * 0.30 = 255 (the LT portion is NOT valued at lt_rate
+        # when it merely offsets ordinary income).
+        self.assertAlmostEqual(s["est_benefit"], 850 * 0.30)
+        self.assertAlmostEqual(s["carryforward_loss"], 0.0)
         self.assertFalse(s["has_options"])
+
+    def test_benefit_capped_at_3k_without_gains(self):
+        lots = [lot(account="Individual - TOD Test", symbol=f"L{i}", gain_loss=-50000.0,
+                    date_acquired="2024-01-01", term="Long-Term") for i in range(3)]
+        _, s = tt.harvest(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(s["est_benefit"], 3000 * 0.32)          # capped ordinary offset
+        self.assertAlmostEqual(s["carryforward_loss"], 150000 - 3000)  # rest carries forward
+
+    def test_benefit_uses_lt_rate_against_lt_gains(self):
+        # A harvested LT loss that offsets a known LT gain saves only lt_rate, not st_rate.
+        lots = [lot(account="Individual - TOD Test", symbol="LTL", gain_loss=-4000.0,
+                    date_acquired="2024-01-01", term="Long-Term")]
+        _, s = tt.harvest(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15, offsetting_lt_gains=10000.0)
+        self.assertAlmostEqual(s["est_benefit"], 4000 * 0.15)
 
     def test_term_recomputed_from_date(self):
         # Stored term is a stale "Short-Term" but acquired > 1yr before as_of -> recomputed Long-Term.
@@ -295,6 +313,58 @@ class SelectLotsTests(unittest.TestCase):
         picks, s = tt.select_lots(lots, "AAA 20 Call", 1, "fifo", as_of=self.AS_OF)
         self.assertAlmostEqual(picks[0]["realized_gain"], -450.0)
         self.assertAlmostEqual(s["realized_gain"], -450.0)
+
+    def test_excludes_tax_advantaged_accounts(self):
+        # A Roth lot of the same symbol must never be a sale candidate (its gains are tax-free and a
+        # specific-ID sale there isn't a tax-optimized taxable sale).
+        lots = [
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+            lot(account="Roth IRA Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+        ]
+        picks, s = tt.select_lots(lots, "XYZ", 20, "min-tax", as_of=self.AS_OF)
+        self.assertTrue(all(tt.is_taxable(p["account"]) for p in picks))
+        self.assertAlmostEqual(s["available_shares"], 10.0)   # only the taxable lot
+        self.assertTrue(s["insufficient"])                    # can't fill 20 from 10 taxable shares
+        self.assertFalse(s["multi_account"])
+
+    def test_pure_tax_advantaged_symbol_yields_no_picks(self):
+        lots = [lot(account="Roth IRA Test", symbol="XYZ", quantity=10, current_value=100.0,
+                    avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                    date_acquired="2024-01-01", term="Long-Term")]
+        picks, s = tt.select_lots(lots, "XYZ", 5, "min-tax", as_of=self.AS_OF)
+        self.assertEqual(picks, [])
+        self.assertAlmostEqual(s["available_shares"], 0.0)
+
+    def test_multi_account_flag(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+            lot(account="Joint Brokerage Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+        ]
+        picks, s = tt.select_lots(lots, "XYZ", 20, "fifo", as_of=self.AS_OF)
+        self.assertTrue(s["multi_account"])
+        self.assertEqual(sorted(s["accounts"]), ["Individual - TOD Test", "Joint Brokerage Test"])
+
+    def test_mixed_none_and_named_account_no_crash(self):
+        # is_taxable(None) is True, so a None-account lot is sellable; sorting accounts must not crash.
+        lots = [
+            lot(account=None, symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+            lot(account="Individual - TOD Test", symbol="XYZ", quantity=10, current_value=100.0,
+                avg_cost_basis=8.0, cost_basis_total=80.0, gain_loss=20.0,
+                date_acquired="2024-01-01", term="Long-Term"),
+        ]
+        picks, s = tt.select_lots(lots, "XYZ", 20, "fifo", as_of=self.AS_OF)
+        self.assertTrue(s["multi_account"])
+        self.assertEqual(len(picks), 2)
 
 
 class WashSaleTests(unittest.TestCase):
@@ -628,6 +698,59 @@ class DashboardTests(unittest.TestCase):
         self.assertAlmostEqual(le["est_tax"], 500 * 0.32 + 2000 * 0.15)
         self.assertEqual(le["n_lots"], 2)
 
+    def test_liquidation_nets_st_loss_against_lt_gain(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="STL", date_acquired="2026-06-01",
+                term="Short-Term", gain_loss=-10000, current_value=0, cost_basis_total=10000),
+            lot(account="Individual - TOD Test", symbol="LTG", date_acquired="2024-01-01",
+                term="Long-Term", gain_loss=10000, current_value=20000, cost_basis_total=10000),
+        ]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["est_tax"], 0.0)        # ST loss fully offsets LT gain -> ~0, never negative
+        self.assertGreaterEqual(le["est_tax"], 0.0)
+
+    def test_liquidation_net_loss_capped_with_carryforward(self):
+        lots = [lot(account="Individual - TOD Test", symbol="BIGL", date_acquired="2024-01-01",
+                    term="Long-Term", gain_loss=-50000, current_value=0, cost_basis_total=50000)]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["est_tax"], -(3000 * 0.32))   # benefit capped at $3k ordinary offset
+        self.assertAlmostEqual(le["deductible_loss"], 3000)
+        self.assertAlmostEqual(le["carryforward"], 47000)
+
+
+class NetCapitalTaxTests(unittest.TestCase):
+    def test_both_gains(self):
+        r = tt._net_capital_tax(5000, 10000, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 5000 * 0.32 + 10000 * 0.15)
+
+    def test_st_gain_lt_loss_nets_to_winner_rate(self):
+        r = tt._net_capital_tax(5000, -2000, 0.32, 0.15)   # net +3000, ST wins
+        self.assertAlmostEqual(r["est_tax"], 3000 * 0.32)
+        self.assertAlmostEqual(r["net_gain"], 3000)
+
+    def test_lt_gain_st_loss_nets_to_lt_rate(self):
+        r = tt._net_capital_tax(-4000, 10000, 0.32, 0.15)  # net +6000, LT wins
+        self.assertAlmostEqual(r["est_tax"], 6000 * 0.15)
+
+    def test_exact_cancel_is_zero(self):
+        r = tt._net_capital_tax(-10000, 10000, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 0.0)
+
+    def test_net_loss_capped(self):
+        r = tt._net_capital_tax(-1000, -5000, 0.32, 0.15)  # net -6000
+        self.assertAlmostEqual(r["est_tax"], -(3000 * 0.32))
+        self.assertAlmostEqual(r["deductible_loss"], 3000)
+        self.assertAlmostEqual(r["carryforward"], 3000)
+
+    def test_small_net_loss_under_cap(self):
+        r = tt._net_capital_tax(0, -850, 0.30, 0.20)
+        self.assertAlmostEqual(r["est_tax"], -(850 * 0.30))
+        self.assertAlmostEqual(r["carryforward"], 0.0)
+
+    def test_all_zero(self):
+        r = tt._net_capital_tax(0, 0, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 0.0)
+
 
 def opt_lot(symbol, expiry_desc, contracts, current_value=1000.0, cost=800.0,
             account="Individual - TOD Test"):
@@ -729,6 +852,18 @@ class OptionsTests(unittest.TestCase):
         self.assertTrue(s["has_naked_calls"])
         self.assertAlmostEqual(s["total_put_assignment_cash"], 15 * 100 * 2)
 
+    def test_expired_excluded_from_exposure(self):
+        lots = [
+            stock_lot("AAL", 100, 1300),
+            opt_lot("AAL 10 Call", "Jul-17-2026", 2, current_value=600),   # live
+            opt_lot("XYZ 100 Call", "Jan-16-2026", 3, current_value=300),  # expired before AS_OF
+        ]
+        positions, by_u, s = tt.options_exposure(lots, self.AS_OF)
+        self.assertEqual(s["n_positions"], 1)                 # only the live option
+        self.assertEqual(s["n_expired_excluded"], 1)
+        self.assertNotIn("XYZ", [p["underlying"] for p in positions])
+        self.assertAlmostEqual(s["bullish_notional"], 10 * 100 * 2)   # expired 100-strike call not counted
+
     def test_covered_call_same_account(self):
         positions, by_u, s = tt.options_exposure([
             stock_lot("XYZ", 100, 5000),                                          # 100 shares, same account
@@ -794,6 +929,132 @@ class ExpirationTests(unittest.TestCase):
             [opt_lot("AAL 17 Call", "Jul-17-2026", 1, current_value=None)], self.AS_OF)
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(rows[0]["premium"], 0.0)
+
+    def test_expired_excluded_from_live_metrics(self):
+        lots = [
+            opt_lot("AAL 10 Call", "Jul-17-2026", 1, current_value=300),   # live, 16 days
+            opt_lot("AAL 17 Call", "Jun-01-2026", 1, current_value=50),    # expired (-30 days)
+        ]
+        rows, s = tt.expiration_calendar(lots, self.AS_OF, within=30)
+        self.assertEqual(len(rows), 2)                       # both still LISTED
+        self.assertEqual(s["expired"], 1)
+        self.assertEqual(s["n_expiring_soon"], 1)            # only the live one is "soon"
+        self.assertEqual(s["nearest_expiry"], "2026-07-17")  # nearest NON-expired
+        self.assertAlmostEqual(s["total_premium_at_risk"], 300)   # expired premium excluded
+
+    def test_expired_short_put_assignment_cash_excluded(self):
+        lots = [
+            opt_lot("AAL 15 Put", "Jul-17-2026", -2, current_value=200),   # live short put
+            opt_lot("AAL 15 Put", "Jun-01-2026", -3, current_value=300),   # expired short put
+        ]
+        _, s = tt.expiration_calendar(lots, self.AS_OF)
+        self.assertAlmostEqual(s["total_assignment_cash"], 15 * 100 * 2)       # live only
+        self.assertAlmostEqual(s["expired_assignment_cash"], 15 * 100 * 3)     # tracked separately
+
+
+class Tier1ReproTests(unittest.TestCase):
+    """Reproduce four actively-wrong-output bugs (crucible reproduce gate). Each asserts the FIXED
+    behavior and currently FAILS. Synthetic data only."""
+    AS_OF = dt.date(2026, 7, 1)
+
+    def _lot(self, **k):
+        d = dict(account="Individual - TOD Test", symbol="AAPL", quantity=10.0, current_value=2000.0,
+                 gain_loss=1000.0, date_acquired="2024-01-01", term="Long-Term", cost_basis_total=1000.0,
+                 avg_cost_basis=100.0, gain_loss_pct=100.0, description="", margin_cash="Margin")
+        d.update(k)
+        return d
+
+    # Bug 1: sell/select_lots must never operate on tax-advantaged (Roth/IRA/HSA/...) lots.
+    def test_bug1_select_lots_excludes_tax_advantaged(self):
+        lots = [
+            self._lot(account="Individual - TOD Test", quantity=10, current_value=2000, cost_basis_total=1000),
+            self._lot(account="Roth IRA Test", quantity=10, current_value=2000, cost_basis_total=1000),
+        ]
+        picks, s = tt.select_lots(lots, "AAPL", 20, "min-tax", as_of=self.AS_OF)
+        self.assertTrue(all(tt.is_taxable(p["account"]) for p in picks),
+                        "select_lots must not pick tax-advantaged lots")
+        self.assertEqual(s["available_shares"], 10.0)      # only the taxable lot is sellable
+        self.assertAlmostEqual(s["est_tax"], 1000 * 0.15)  # tax only on the taxable Long-Term gain
+
+    # Bug 2a: liquidation_estimate must net ST vs LT and never invent a negative tax from a net gain.
+    def test_bug2_liquidation_nets_st_lt(self):
+        lots = [
+            self._lot(symbol="STL", date_acquired="2026-06-01", term="Short-Term",
+                      gain_loss=-10000, current_value=0, cost_basis_total=10000),
+            self._lot(symbol="LTG", date_acquired="2024-01-01", term="Long-Term",
+                      gain_loss=10000, current_value=20000, cost_basis_total=10000),
+        ]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        # ST loss fully nets the LT gain -> net 0 -> ~0 tax, NOT a negative "refund"
+        self.assertGreaterEqual(le["est_tax"], 0.0)
+        self.assertAlmostEqual(le["est_tax"], 0.0, places=2)
+
+    # Bug 2b: harvest est_benefit must respect the $3k ordinary-offset cap when there are no gains.
+    def test_bug2_harvest_benefit_capped(self):
+        lots = [self._lot(symbol=f"L{i}", gain_loss=-50000.0, current_value=0,
+                          cost_basis_total=50000, date_acquired="2024-01-01") for i in range(3)]
+        _, s = tt.harvest(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        # -150k of losses, no offsetting gains -> first-year benefit is at most $3,000 * lt_rate, not $22,500
+        self.assertLessEqual(s["est_benefit"], 3000 * 0.32 + 1e-6)
+
+    # Bug 3: expired options (expiry < as_of) must not count as live exposure.
+    def test_bug3_options_exclude_expired(self):
+        lots = [opt_lot("XYZ 100 Call", "Jan-16-2026", 3, current_value=300)]  # expired before AS_OF
+        positions, by_u, s = tt.options_exposure(lots, self.AS_OF)
+        self.assertEqual(s["n_positions"], 0)
+        self.assertAlmostEqual(s["bullish_notional"], 0.0)
+        self.assertAlmostEqual(s["long_premium_at_risk"], 0.0)
+
+    def test_bug3_expiration_soon_excludes_expired(self):
+        lots = [opt_lot("XYZ 100 Call", "Jan-16-2026", 3, current_value=300)]  # -166 days
+        _, s = tt.expiration_calendar(lots, self.AS_OF, within=30)
+        self.assertEqual(s["n_expiring_soon"], 0)          # already expired is NOT "expiring soon"
+        self.assertAlmostEqual(s["soon_premium_at_risk"], 0.0)
+
+    # Bug 4: inconsistent per-share value across a symbol's lots must be flagged, not silently trusted.
+    def test_bug4_price_dispersion_flagged(self):
+        lots = [
+            self._lot(symbol="AAPL", quantity=10, current_value=2000, cost_basis_total=1000),  # $200/sh
+            self._lot(symbol="AAPL", quantity=10, current_value=100, cost_basis_total=1000),   # $10/sh (corrupt)
+        ]
+        flags = tt.price_dispersion_flags(lots)
+        self.assertIn("AAPL", flags)
+
+
+class PriceDispersionTests(unittest.TestCase):
+    def _lot(self, symbol, qty, value):
+        return lot(account="Individual - TOD Test", symbol=symbol, quantity=float(qty),
+                   current_value=float(value), gain_loss=0.0, date_acquired="2024-01-01",
+                   term="Long-Term", cost_basis_total=float(value), avg_cost_basis=1.0, gain_loss_pct=0.0)
+
+    def test_consistent_prices_not_flagged(self):
+        lots = [self._lot("AAPL", 10, 2000), self._lot("AAPL", 5, 1000)]   # both $200/sh
+        self.assertEqual(tt.price_dispersion_flags(lots), {})
+
+    def test_inconsistent_prices_flagged(self):
+        lots = [self._lot("AAPL", 10, 2000), self._lot("AAPL", 10, 100)]   # $200 vs $10
+        flags = tt.price_dispersion_flags(lots)
+        self.assertIn("AAPL", flags)
+        self.assertAlmostEqual(flags["AAPL"]["min"], 10.0)
+        self.assertAlmostEqual(flags["AAPL"]["max"], 200.0)
+
+    def test_single_lot_not_flagged(self):
+        self.assertEqual(tt.price_dispersion_flags([self._lot("AAPL", 10, 2000)]), {})
+
+    def test_options_and_cash_ignored(self):
+        lots = [
+            lot(account="A", symbol="AAA 20 Call", quantity=2, current_value=1600, description="Jul-17-2026",
+                gain_loss=0.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=1600,
+                avg_cost_basis=8.0, gain_loss_pct=0.0),
+            lot(account="A", symbol="AAA 20 Call", quantity=1, current_value=100, description="Jul-17-2026",
+                gain_loss=0.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=100,
+                avg_cost_basis=1.0, gain_loss_pct=0.0),
+        ]
+        self.assertEqual(tt.price_dispersion_flags(lots), {})   # options are not price-checked
+
+    def test_zero_price_no_crash(self):
+        lots = [self._lot("AAPL", 10, 0), self._lot("AAPL", 5, 0)]   # all zero -> max==0, no flag, no crash
+        self.assertEqual(tt.price_dispersion_flags(lots), {})
 
 
 if __name__ == "__main__":

@@ -239,8 +239,9 @@ def _as_of(val):
     return dt.date.fromisoformat(val) if val else dt.date.today()
 
 
-def cmd_harvest(db_path, as_of, st_rate, lt_rate):
-    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate)
+def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
+    lots = fetch_lots(db_path)
+    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains)
     if not rows:
         print("No harvestable losses in taxable accounts.")
         return
@@ -252,8 +253,16 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate):
     print(f"\nHarvestable losses (taxable accounts, as of {as_of}):")
     print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
     print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
-    print(f"  Estimated tax benefit (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_benefit']:,.2f}"
-          "  [estimate, not tax advice]")
+    print(f"  Estimated current-year tax benefit: ~${s['est_benefit']:,.2f}  [estimate, not tax advice]")
+    print("  (harvested losses first offset realized gains of the same character, then up to $3,000 "
+          "of ordinary income per year; the rest carries forward)")
+    if s["carryforward_loss"] > 0:
+        print(f"  Loss carried forward to future years: ${s['carryforward_loss']:,.2f}")
+    flags = tax_tools.price_dispersion_flags(lots)
+    flagged = sorted({r["symbol"] for r in rows if (r["symbol"] or "").strip().upper() in flags})
+    if flagged:
+        print(f"  WARNING: inconsistent per-share prices for: {', '.join(flagged)}; "
+              "the export may be corrupted -- verify these lots before harvesting.")
     if s["has_options"]:
         print("  Note: includes option lots -- verify your own tax treatment for options.")
 
@@ -293,9 +302,11 @@ def cmd_concentration(db_path, top, threshold):
 
 
 def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
-    picks, s = tax_tools.select_lots(fetch_lots(db_path), symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    lots = fetch_lots(db_path)
+    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate)
     if not picks:
-        print(f"No sellable lots found for {s['symbol']}" + (f" in accounts matching '{account}'." if account else "."))
+        print(f"No sellable taxable lots found for {s['symbol']}"
+              + (f" in accounts matching '{account}'." if account else " (tax-advantaged lots are excluded)."))
         return
     _print_table(
         ["Account", "Acquired", "Term", "Qty", "Basis", "Est Proceeds", "Realized G/L"],
@@ -304,8 +315,15 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
     )
     print(f"\n{s['strategy']} sale of {s['filled_shares']:g}/{s['requested_shares']:g} sh {s['symbol']} (as of {as_of}):")
     if s["insufficient"]:
-        print(f"  WARNING: only {s['available_shares']:g} shares available; short by "
+        print(f"  WARNING: only {s['available_shares']:g} taxable shares available; short by "
               f"{s['requested_shares'] - s['filled_shares']:g}.")
+    if s["multi_account"]:
+        print("  NOTE: picks span multiple accounts; specific-ID sales are per-account -- "
+              "place one order per account.")
+    disp = tax_tools.price_dispersion_flags(lots).get(s["symbol"])
+    if disp:
+        print(f"  WARNING: {s['symbol']} lots show inconsistent per-share prices "
+              f"(${disp['min']:,.2f}..${disp['max']:,.2f}); the export may be corrupted -- verify before acting.")
     print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
     print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
     print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
@@ -434,8 +452,13 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
 
     le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
     print("\n-- If sold now (taxable liquidation estimate) --")
-    print(f"  ST gain ${le['st_gain']:,.2f} + LT gain ${le['lt_gain']:,.2f} = ${le['total_gain']:,.2f}; "
-          f"est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${le['est_tax']:,.2f}.")
+    print(f"  ST {le['st_gain']:+,.2f} + LT {le['lt_gain']:+,.2f} = net {le['total_gain']:+,.2f} "
+          f"(ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST and LT netted).")
+    if le["net_loss"] > 0:
+        print(f"  Net capital LOSS: est. current-year benefit ~${-le['est_tax']:,.2f} "
+              f"(${le['deductible_loss']:,.2f} offsets ordinary income; ${le['carryforward']:,.2f} carries forward).")
+    else:
+        print(f"  Est. tax on the net gain: ~${le['est_tax']:,.2f}.")
 
     print("\n-- 0% LTCG capacity --")
     if income is not None and ceiling is not None:
@@ -451,7 +474,10 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
 def cmd_options(db_path, as_of, account, top):
     positions, by_u, s = tax_tools.options_exposure(fetch_lots(db_path), as_of, account)
     if not positions:
-        print("No option positions found.")
+        msg = "No live option positions found."
+        if s.get("n_expired_excluded"):
+            msg += f" ({s['n_expired_excluded']} expired option lot(s) excluded.)"
+        print(msg)
         return
     print("== Exposure by underlying ==")
     _print_table(
@@ -473,6 +499,8 @@ def cmd_options(db_path, as_of, account, top):
          for p in positions[:top]],
     )
     print(f"\nOption positions (as of {as_of}): {s['n_positions']} across {s['n_underlyings']} underlyings.")
+    if s.get("n_expired_excluded"):
+        print(f"  ({s['n_expired_excluded']} expired option lot(s) excluded from exposure.)")
     print(f"  Premium at risk (long): ${s['long_premium_at_risk']:,.2f}; notional exposure: "
           f"${s['total_notional']:,.2f} (bullish ${s['bullish_notional']:,.2f} / bearish ${s['bearish_notional']:,.2f}).")
     if s["has_short"]:
@@ -529,6 +557,10 @@ def main(argv=None):
     hp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     hp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     hp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    hp.add_argument("--offsetting-st-gains", type=float, default=0.0,
+                    help="realized short-term gains these losses can offset (default 0)")
+    hp.add_argument("--offsetting-lt-gains", type=float, default=0.0,
+                    help="realized long-term gains these losses can offset (default 0)")
     rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
     rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     rp.add_argument("--within", type=int, help="only lots ripening within N days")
@@ -601,7 +633,8 @@ def main(argv=None):
             _print_table(list(rows[0].keys()), [tuple(r) for r in rows])
         print(f"({len(rows)} rows)")
     elif args.cmd == "harvest":
-        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
+        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate,
+                    args.offsetting_st_gains, args.offsetting_lt_gains)
     elif args.cmd == "ripening":
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     elif args.cmd == "concentration":

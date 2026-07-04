@@ -77,13 +77,18 @@ python scripts/analyze/portfolio.py options --top 15               # options exp
 python scripts/analyze/portfolio.py expiration --within 30         # options expiring within 30 days (premium at risk, moneyness)
 ```
 - **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
-  cash; ranks short-term losses first (they offset ordinary income).
+  cash; ranks short-term losses first (they offset ordinary income). The estimated benefit models
+  single-year capital-loss netting: losses first offset realized gains (`--offsetting-st-gains`/
+  `--offsetting-lt-gains`), then up to $3,000 of ordinary income, with the rest carried forward.
 - **`ripening`** — taxable short-term lots and the exact date each becomes long-term; flags short-term
   *losers* to harvest before they ripen.
 - **`concentration`** — aggregates value by symbol across all accounts (cash reported separately);
   Herfindahl index + single-name flags (`--threshold`, default `0.05`).
-- **`sell SYMBOL SHARES`** — picks the specific lots to sell to minimize tax and prints the specific-ID
-  instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
+- **`sell SYMBOL SHARES`** — picks the specific **taxable** lots to sell to minimize tax and prints the
+  specific-ID instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
+  Tax-advantaged lots (IRA/Roth/HSA/BrokerageLink/529) are excluded (their gains are tax-free), and a
+  pick spanning accounts prints a per-account NOTE (specific-ID sales are one order per account). Warns
+  when a symbol's per-share prices are inconsistent across lots (a possible export corruption).
 - **`washsale HISTORY.csv`** — needs a Fidelity **Accounts History** CSV export. For each current
   taxable loss it flags a same-security purchase in the **prior `--window` days (through `--as-of`)**
   in *any* account, graded by the buying account: **BLOCKED** for an IRA/Roth/HSA (loss permanently
@@ -105,17 +110,21 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   deduction depends on itemizing and AGI limits.
 - **`dashboard`** — read-only year-end tax snapshot consolidating the other tools: unrealized ST/LT
   gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
-  `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+  `--within` days, the estimated tax if all taxable lots were sold now (ST and LT netted; a net loss
+  shows the $3,000-capped current-year benefit plus carryforward), and — with `--income`/`--ceiling`
   — the 0% LTCG realization capacity. Estimates only, **not tax advice**.
 - **`options`** — options exposure dashboard. Parses each option lot (`AAL 17 Call` + the expiry from
   the Description column) into underlying/strike/type/expiry; reports premium at risk (current value),
   notional (strike×100×contracts), long/short (by quantity sign), per-underlying directional bias, and
   covered-vs-naked / cash-secured-put assignment cash for any short options. Moneyness (ITM/OTM) uses a
   spot from your largest held stock lot per underlying (approximate; "n/a" when not held). Delta/theta
-  need live quotes and are not computed. **Not investment advice.**
+  need live quotes and are not computed. Already-expired contracts are excluded from exposure. **Not
+  investment advice.**
 - **`expiration`** — option expiration & assignment calendar: one row per dated option lot sorted by
   expiry, with days-to-expiry, premium at risk (long current value), moneyness, and short-put
-  assignment cash. `--within N` limits to options expiring within N days. **Not investment advice.**
+  assignment cash. `--within N` limits to options expiring within N days. Already-expired contracts are
+  still listed (with a separate count) but excluded from the live/soon/assignment totals. **Not
+  investment advice.**
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed
