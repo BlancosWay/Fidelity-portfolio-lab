@@ -142,12 +142,22 @@ def price_dispersion_flags(lots, tol=0.02):
     return flags
 
 
+def _live_quantity(lot):
+    """A lot is a LIVE (open) position only when its quantity parses to a strictly positive number.
+    Zero/negative/blank/non-numeric quantities are closed or unparseable lots, so the live-position
+    analyses (harvest candidates, liquidation, unrealized-by-account) skip them."""
+    try:
+        return float(lot.get("quantity")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def taxable_loss_candidates(lots):
-    """Lots eligible for tax-loss harvesting: taxable account, unrealized loss (gain_loss < 0),
-    excluding cash rows. Returned in input order (callers sort)."""
+    """Lots eligible for tax-loss harvesting: taxable account, LIVE (quantity > 0) position, unrealized
+    loss (gain_loss < 0), excluding cash rows. Returned in input order (callers sort)."""
     out = []
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         gl = lot.get("gain_loss")
         try:
@@ -793,12 +803,12 @@ def holdings_overview(lots, as_of):
 def unrealized_by_account(lots, as_of):
     """Per-account unrealized gain/loss split short-term vs long-term (informational, NOT tax advice).
 
-    Non-cash lots with a numeric ``gain_loss``; term via ``recompute_term`` (not the stale stored
-    term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl, total_gl,
-    market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
+    Non-cash LIVE lots (quantity > 0) with a numeric ``gain_loss``; term via ``recompute_term`` (not the
+    stale stored term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl,
+    total_gl, market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
     by = {}
     for lot in lots:
-        if is_cash(lot):
+        if is_cash(lot) or not _live_quantity(lot):
             continue
         try:
             gl = float(lot.get("gain_loss"))
@@ -855,13 +865,14 @@ def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15):
 def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
     """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
 
-    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable
-    accounts, then nets them via ``_net_capital_tax``: a net gain is taxed (never negative), a net
-    loss yields a benefit capped at the $3,000 ordinary-income offset plus a carryforward."""
+    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable,
+    LIVE (quantity > 0) lots, then nets them via ``_net_capital_tax``: a net gain is taxed (never
+    negative), a net loss yields a benefit capped at the $3,000 ordinary-income offset plus a
+    carryforward."""
     st_gain = lt_gain = 0.0
     n_lots = 0
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         try:
             gl = float(lot.get("gain_loss"))

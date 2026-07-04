@@ -1127,6 +1127,26 @@ class Tier2ReproTests(unittest.TestCase):
         self.assertEqual(tt.taxable_loss_candidates([z]), [])
         self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0)
 
+    def test_bug7_non_live_quantities_excluded_everywhere(self):
+        # Zero, negative, non-numeric, and missing quantities are all non-live and excluded from the
+        # three live-position analyses.
+        for q in (0.0, -5.0, "n/a", None):
+            z = lot(account="Individual - TOD Test", symbol="X", quantity=q, current_value=100.0,
+                    gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
+            self.assertEqual(tt.taxable_loss_candidates([z]), [], q)
+            self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0, q)
+            rows, _ = tt.unrealized_by_account([z], self.AS_OF)
+            self.assertEqual(rows, [], q)
+
+    def test_bug7_live_positive_quantity_still_counted(self):
+        # A normal live lot is still counted (the guard must not over-exclude).
+        live = lot(account="Individual - TOD Test", symbol="Y", quantity=10.0, current_value=100.0,
+                   gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
+        self.assertEqual(len(tt.taxable_loss_candidates([live])), 1)
+        self.assertEqual(tt.liquidation_estimate([live], self.AS_OF)["n_lots"], 1)
+        rows, _ = tt.unrealized_by_account([live], self.AS_OF)
+        self.assertEqual(len(rows), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

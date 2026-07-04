@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
+  or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable
+  loss, as taxable in the "if sold now" liquidation estimate, and in per-account unrealized gain/loss.
+  `harvest` (via `taxable_loss_candidates`), `liquidation_estimate`, and `unrealized_by_account` now
+  skip any lot whose quantity is not a strictly positive number (blank/non-numeric quantities are
+  treated as not-live), so only open positions are analyzed.
 - **`concentration` excludes options and non-positive-value symbols from the equity ranking.** An
   option lot's `current_value` is the premium, not the notional exposure, so ranking it as a single-name
   equity position overstated diversification risk; options are now dropped from the ranking (count noted,
