@@ -59,6 +59,7 @@ Real data:
 | `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`). |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
+| `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
@@ -81,6 +82,11 @@ Real data:
 > ceiling you supply. `--within-rate` (default `0.0`) is the marginal LTCG rate on gains realized
 > below the ceiling: `0.0` models the **0% long-term bracket** (tax-free); pass your real LTCG rate
 > for an **NIIT/IRMAA** ceiling, which only avoids the surcharge/tier while the gain is still taxed.
+>
+> `gift` ranks taxable **long-term appreciated** lots (highest gain% first) as charitable-donation
+> candidates — donating appreciated long-term shares avoids the capital-gains tax and (if you itemize)
+> deducts fair market value — and counts short-term-gain and loss lots separately (wait / harvest
+> instead). `--min-gain-pct` (a percent number, e.g. `20`) filters to the most-appreciated lots.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

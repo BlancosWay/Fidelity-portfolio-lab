@@ -382,6 +382,28 @@ def cmd_capacity(db_path, income, ceiling, ceiling_label, target_gain, account, 
           "supply for your tax year.")
 
 
+def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
+    rows, s = tax_tools.gift_candidates(fetch_lots(db_path), as_of, min_gain_pct, account, lt_rate)
+    if not rows:
+        print("No taxable long-term appreciated lots at/above the gain threshold.")
+        return
+    _print_table(
+        ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Est Tax Avoided"],
+        [(r["account"], r["symbol"], r["acquired"], r["quantity"],
+          round(r["basis"], 2) if r["basis"] is not None else "",
+          round(r["value"], 2) if r["value"] is not None else "",
+          round(r["gain"], 2),
+          f"{r['gain_pct']:.2f}%" if r["gain_pct"] is not None else "n/a",
+          round(r["tax_avoided"], 2)) for r in rows[:top]],
+    )
+    print(f"\nDonation candidates (taxable long-term gains, as of {as_of}): {s['n_candidates']}.")
+    print(f"  Donatable FMV: ${s['total_fmv']:,.2f}; unrealized LT gain: ${s['total_gain']:,.2f}; "
+          f"est. cap-gains tax avoided if donated (LT@{lt_rate:.0%}): ~${s['total_tax_avoided']:,.2f}.")
+    print(f"  {s['n_short_term_gain']} short-term gain lot(s) -> wait for long-term before donating; "
+          f"{s['n_loss']} loss lot(s) -> sell to harvest instead (see 'harvest'/'sell').")
+    print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -431,6 +453,13 @@ def main(argv=None):
     kp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the target-gain estimate")
     kp.add_argument("--within-rate", type=float, default=0.0,
                     help="marginal LTCG rate on gains realized below the ceiling (0.0 = the 0%% LTCG bracket)")
+    gfp = sub.add_parser("gift", help="appreciated-lot donor picker (taxable long-term gains)")
+    gfp.add_argument("--min-gain-pct", type=float, default=0.0,
+                     help="only lots with gain%% >= this (percent number, e.g. 20)")
+    gfp.add_argument("--top", type=int, default=20, help="show the top N candidates (default 20)")
+    gfp.add_argument("--account", help="restrict to accounts matching this text")
+    gfp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    gfp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the tax-avoided estimate")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -461,6 +490,8 @@ def main(argv=None):
     elif args.cmd == "capacity":
         cmd_capacity(args.db, args.income, args.ceiling, args.ceiling_label, args.target_gain,
                      args.account, _as_of(args.as_of), args.lt_rate, args.within_rate)
+    elif args.cmd == "gift":
+        cmd_gift(args.db, args.min_gain_pct, args.top, args.account, _as_of(args.as_of), args.lt_rate)
     return 0
 
 

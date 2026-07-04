@@ -225,5 +225,25 @@ class CapacityCliTests(unittest.TestCase):
             self.assertEqual(cm.exception.code, 0)
 
 
+class GiftCliTests(unittest.TestCase):
+    def test_output(self):
+        db = build_db([
+            _row("Individual - TOD Test", "DONX", 10, "Jan-05-2024",
+                 "$100.00", "$1,000.00", "$4,000.00", "+$3,000.00", "+300.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_gift, db, 0.0, 20, None, AS_OF, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("DONX", text)
+        self.assertIn("Donation candidates", text)
+        self.assertIn("not tax advice", text)
+
+    def test_gift_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["gift", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

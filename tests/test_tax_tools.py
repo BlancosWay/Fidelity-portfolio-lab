@@ -523,5 +523,64 @@ class CapacityTests(unittest.TestCase):
         self.assertEqual(s["budget"], 0.0)
 
 
+class GiftTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def lt(self, symbol, gain, pct, account="Individual - TOD Test", acquired="2024-01-15"):
+        value = 1000.0 + gain
+        return lot(account=account, symbol=symbol, quantity=10.0, current_value=value,
+                   gain_loss=float(gain), date_acquired=acquired, term="Long-Term",
+                   cost_basis_total=value - gain, avg_cost_basis=(value - gain) / 10.0, gain_loss_pct=pct)
+
+    def test_lt_gain_is_candidate(self):
+        rows, s = tt.gift_candidates([self.lt("DON", 300, 30.0)], self.AS_OF)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertAlmostEqual(rows[0]["tax_avoided"], 300 * 0.15)
+        self.assertAlmostEqual(s["total_gain"], 300)
+        self.assertAlmostEqual(s["total_fmv"], 1300)
+
+    def test_min_gain_pct_filters(self):
+        _, s = tt.gift_candidates([self.lt("DON", 300, 30.0)], self.AS_OF, min_gain_pct=40)
+        self.assertEqual(s["n_candidates"], 0)
+
+    def test_short_term_and_loss_excluded_and_counted(self):
+        lots = [
+            self.lt("DON", 300, 30.0),
+            lot(symbol="STG", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000.0, current_value=1300.0, gain_loss=300.0, gain_loss_pct=30.0),
+            lot(symbol="LOSS", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=2000.0, current_value=1500.0, gain_loss=-500.0, gain_loss_pct=-25.0),
+        ]
+        _, s = tt.gift_candidates(lots, self.AS_OF)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertEqual(s["n_short_term_gain"], 1)
+        self.assertEqual(s["n_loss"], 1)
+
+    def test_option_and_ira_excluded(self):
+        lots = [self.lt("OPT 30 Call", 300, 30.0), self.lt("IRAD", 300, 30.0, account="Roth IRA Test")]
+        _, s = tt.gift_candidates(lots, self.AS_OF)
+        self.assertEqual(s["n_candidates"], 0)
+
+    def test_sort_highest_gain_pct_first(self):
+        rows, _ = tt.gift_candidates([self.lt("LOWP", 900, 20.0), self.lt("HIGHP", 300, 300.0)], self.AS_OF)
+        self.assertEqual([r["symbol"] for r in rows], ["HIGHP", "LOWP"])
+
+    def test_stale_stored_term_recomputed(self):
+        stale = lot(symbol="STALE", date_acquired="2026-06-01", term="Long-Term",
+                    cost_basis_total=1000.0, current_value=1300.0, gain_loss=300.0, gain_loss_pct=30.0)
+        _, s = tt.gift_candidates([stale], self.AS_OF)
+        self.assertEqual(s["n_candidates"], 0)          # recompute_term => Short-Term, not a candidate
+        self.assertEqual(s["n_short_term_gain"], 1)
+
+    def test_uncomputable_pct(self):
+        nopct = lot(symbol="NOPCT", date_acquired="2024-01-01", term="Long-Term",
+                    cost_basis_total=None, current_value=1000.0, gain_loss=1000.0, gain_loss_pct=None)
+        rows, s = tt.gift_candidates([nopct], self.AS_OF)                 # default threshold -> included
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertIsNone(rows[0]["gain_pct"])
+        _, s2 = tt.gift_candidates([nopct], self.AS_OF, min_gain_pct=10)  # positive threshold -> excluded
+        self.assertEqual(s2["n_candidates"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
