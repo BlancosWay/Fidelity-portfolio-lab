@@ -1128,24 +1128,32 @@ class Tier2ReproTests(unittest.TestCase):
         self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0)
 
     def test_bug7_non_live_quantities_excluded_everywhere(self):
-        # Zero, negative, non-numeric, and missing quantities are all non-live and excluded from the
-        # three live-position analyses.
+        # Zero, negative, non-numeric, and missing quantities are all non-live and excluded from every
+        # live-position analysis.
         for q in (0.0, -5.0, "n/a", None):
             z = lot(account="Individual - TOD Test", symbol="X", quantity=q, current_value=100.0,
                     gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
             self.assertEqual(tt.taxable_loss_candidates([z]), [], q)
             self.assertEqual(tt.liquidation_estimate([z], self.AS_OF)["n_lots"], 0, q)
-            rows, _ = tt.unrealized_by_account([z], self.AS_OF)
-            self.assertEqual(rows, [], q)
+            self.assertEqual(tt.unrealized_by_account([z], self.AS_OF)[0], [], q)
+            self.assertEqual(tt.ripening([z], self.AS_OF)[0], [], q)              # short-term loss can't ripen
+            gain = lot(account="Individual - TOD Test", symbol="G", quantity=q, current_value=2000.0,
+                       gain_loss=500.0, date_acquired="2024-01-01", term="Long-Term",
+                       cost_basis_total=1500.0, gain_loss_pct=33.3)
+            self.assertEqual(tt.gift_candidates([gain], self.AS_OF)[0], [], q)    # not a live donation lot
 
     def test_bug7_live_positive_quantity_still_counted(self):
-        # A normal live lot is still counted (the guard must not over-exclude).
+        # A normal live lot is still counted by every analysis (the guard must not over-exclude).
         live = lot(account="Individual - TOD Test", symbol="Y", quantity=10.0, current_value=100.0,
                    gain_loss=-50.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=150.0)
         self.assertEqual(len(tt.taxable_loss_candidates([live])), 1)
         self.assertEqual(tt.liquidation_estimate([live], self.AS_OF)["n_lots"], 1)
-        rows, _ = tt.unrealized_by_account([live], self.AS_OF)
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(tt.unrealized_by_account([live], self.AS_OF)[0]), 1)
+        self.assertEqual(len(tt.ripening([live], self.AS_OF)[0]), 1)
+        gain = lot(account="Individual - TOD Test", symbol="G", quantity=3.0, current_value=2000.0,
+                   gain_loss=500.0, date_acquired="2024-01-01", term="Long-Term",
+                   cost_basis_total=1500.0, gain_loss_pct=33.3)
+        self.assertEqual(len(tt.gift_candidates([gain], self.AS_OF)[0]), 1)
 
 
 if __name__ == "__main__":

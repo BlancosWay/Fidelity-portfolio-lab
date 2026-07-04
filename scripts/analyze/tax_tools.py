@@ -227,7 +227,7 @@ def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, of
 
 
 def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
-    """Taxable short-term lots and the date each becomes long-term.
+    """Taxable, LIVE (quantity > 0) short-term lots and the date each becomes long-term.
 
     ``ripens_on`` is the first long-term day = one-year anniversary + 1 day (reusing the Feb-29 clamp).
     Winners (gain > 0) show the estimated tax saved by waiting ``gain*(st_rate-lt_rate)``; losers
@@ -235,7 +235,7 @@ def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
     ``within`` filters to lots ripening within N days. Sorted by ``ripens_on`` ascending."""
     rows = []
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         acq = lot_acquired_date(lot)
         if acq is None or holding_term(acq, as_of) != "Short-Term":
@@ -665,15 +665,15 @@ def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
     """Appreciated-lot donor picker (informational, NOT tax advice).
 
     Donating an appreciated LONG-TERM security avoids the capital-gains tax and (if you itemize)
-    deducts fair market value. Surfaces the best taxable long-term gain lots to donate, ranked by
-    gain% (most-appreciated first); short-term-gain and loss lots are counted separately and steered
-    elsewhere (wait for long-term / harvest instead). ``min_gain_pct`` is a PERCENT number (20 == 20%).
-    A positive ``min_gain_pct`` requires a computable gain%; at the default 0 a positive gain suffices.
-    Returns ``(rows, summary)``."""
+    deducts fair market value. Surfaces the best taxable, LIVE (quantity > 0) long-term gain lots to
+    donate, ranked by gain% (most-appreciated first); short-term-gain and loss lots are counted
+    separately and steered elsewhere (wait for long-term / harvest instead). ``min_gain_pct`` is a
+    PERCENT number (20 == 20%). A positive ``min_gain_pct`` requires a computable gain%; at the default
+    0 a positive gain suffices. Returns ``(rows, summary)``."""
     acct = (account or "").lower()
     rows, n_short_term_gain, n_loss = [], 0, 0
     for lot in lots:
-        if is_cash(lot) or not is_taxable(lot.get("account")):
+        if is_cash(lot) or not is_taxable(lot.get("account")) or not _live_quantity(lot):
             continue
         if security_key(lot.get("symbol"))["kind"] == "option":
             continue
