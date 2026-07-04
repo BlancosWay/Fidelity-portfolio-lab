@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Tier-2 tax tools** — new read-only `portfolio.py` subcommands (stdlib only; estimates, not tax advice):
+  - `capacity` — bracket-aware realized-gain capacity planner. Selects taxable long-term gain lots
+    (biggest gain first, final lot partial) to fill a `--target-gain` or the headroom
+    `max(0, --ceiling − --income)` to an income ceiling you supply. `--within-rate` (default `0.0`)
+    is the marginal LTCG rate on gains below the ceiling: `0.0` = the 0% long-term bracket (tax-free);
+    pass your real LTCG rate for an NIIT/IRMAA ceiling (avoids the surcharge/tier, gain still taxed).
+  - `gift` — appreciated-lot donor picker. Ranks taxable long-term gain lots by gain% as
+    charitable-donation candidates (donating appreciated long-term shares avoids the capital-gains
+    tax and deducts FMV if you itemize), with the est. cap-gains tax avoided; short-term-gain and
+    loss lots are counted and steered elsewhere. `--min-gain-pct` filters to the most-appreciated lots.
+  - `dashboard` — read-only year-end tax snapshot consolidating the Tier-1/Tier-2 tools: unrealized
+    ST/LT gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+    `--within` days, the estimated tax if all taxable lots were sold now, and (with `--income`/`--ceiling`)
+    the 0% LTCG realization capacity.
 - **Tier-1 tax/portfolio tools** — five new read-only `portfolio.py` subcommands (stdlib only; all
   dollar/tax figures are estimates, not tax advice):
   - `harvest` — tax-loss harvest candidates in taxable accounts, short-term losses first.

@@ -484,3 +484,251 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
         "history_end": max((h["date"] for h in history), default=None),
     }
     return {"candidates": cand_rows, "realized": realized, "summary": summary}
+
+
+def gain_capacity(lots, as_of, income=None, ceiling=None, target_gain=None, account=None,
+                  lt_rate=0.15, within_rate=0.0):
+    """Bracket-aware realized-gain capacity planner (informational, NOT tax advice).
+
+    Selects taxable LONG-TERM GAIN lots to realize either an explicit ``target_gain`` or the headroom
+    ``max(0, ceiling - income)`` to a user-supplied income ceiling, consuming lots largest-gain-first
+    and taking the final lot partially. Options, short-term lots, losses and tax-advantaged accounts
+    are excluded (gain-harvesting applies to taxable long-term gains). ``within_rate`` is the marginal
+    long-term capital-gains rate on gains realized BELOW the ceiling: the default ``0.0`` is the top of
+    the 0% long-term bracket (gain is tax-free); pass the real LTCG rate for an NIIT/IRMAA ceiling,
+    which only avoids the surcharge/tier while the gain itself is still taxed.
+
+    Returns ``(picks, summary)``; ``picks == []`` when no budget is supplied or the budget is <= 0."""
+    acct = (account or "").lower()
+    candidates = []
+    for lot in lots:
+        if is_cash(lot) or not is_taxable(lot.get("account")):
+            continue
+        if security_key(lot.get("symbol"))["kind"] == "option":
+            continue
+        if recompute_term(lot, as_of) != "Long-Term":
+            continue
+        try:
+            gain = float(lot.get("gain_loss"))
+            qty = float(lot.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        if gain <= 0 or qty <= 0:
+            continue
+        if acct and acct not in (lot.get("account") or "").lower():
+            continue
+        try:
+            basis = float(lot.get("cost_basis_total"))
+        except (TypeError, ValueError):
+            basis = None
+        try:
+            value = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            value = None
+        gp = lot.get("gain_loss_pct")
+        candidates.append({
+            "account": lot.get("account"), "symbol": lot.get("symbol"),
+            "acquired": lot.get("date_acquired") or "", "quantity": qty,
+            "basis": basis, "value": value, "gain": gain,
+            "gain_pct": gp if isinstance(gp, (int, float)) else None,
+        })
+    available_gain = sum(c["gain"] for c in candidates)
+
+    if target_gain is not None:
+        budget, source = float(target_gain), "target-gain"
+    elif income is not None and ceiling is not None:
+        budget, source = max(0.0, float(ceiling) - float(income)), "headroom"
+    else:
+        budget, source = None, "inventory-only"
+
+    picks, realized = [], 0.0
+    if budget is not None and budget > 0:
+        ordered = sorted(candidates, key=lambda c: (
+            -c["gain"], -(c["gain_pct"] if c["gain_pct"] is not None else -1e18), c["symbol"] or ""))
+        cum = 0.0
+        for c in ordered:
+            if cum >= budget - 1e-9:
+                break
+            remaining = budget - cum
+            if c["gain"] <= remaining + 1e-9:
+                frac, partial = 1.0, False
+            else:
+                frac, partial = remaining / c["gain"], True
+            picks.append({
+                **c,
+                "qty_used": c["quantity"] * frac,
+                "gain_used": c["gain"] * frac,
+                "basis_used": (c["basis"] * frac) if c["basis"] is not None else None,
+                "value_used": (c["value"] * frac) if c["value"] is not None else None,
+                "partial": partial,
+            })
+            cum += c["gain"] * frac
+        realized = cum
+
+    has_ceiling = income is not None and ceiling is not None
+    if source == "headroom":
+        est_tax = realized * within_rate
+    elif source == "target-gain":
+        est_tax = realized * lt_rate
+    else:
+        est_tax = None
+    summary = {
+        "source": source,
+        "budget": budget,
+        "available_gain": available_gain,
+        "realized": realized,
+        "remaining_budget": (max(0.0, budget - realized) if budget is not None else None),
+        "leftover_gain": max(0.0, available_gain - realized),
+        "constrained_by": ("inventory" if (budget is not None and available_gain < budget)
+                           else ("budget" if budget is not None else "none")),
+        "income": income,
+        "ceiling": ceiling,
+        "headroom": (max(0.0, float(ceiling) - float(income)) if has_ceiling else None),
+        "above_ceiling": has_ceiling and float(income) >= float(ceiling),
+        "est_tax": est_tax,
+        "n_candidates": len(candidates),
+        "lt_rate": lt_rate,
+        "within_rate": within_rate,
+    }
+    return picks, summary
+
+
+def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
+    """Appreciated-lot donor picker (informational, NOT tax advice).
+
+    Donating an appreciated LONG-TERM security avoids the capital-gains tax and (if you itemize)
+    deducts fair market value. Surfaces the best taxable long-term gain lots to donate, ranked by
+    gain% (most-appreciated first); short-term-gain and loss lots are counted separately and steered
+    elsewhere (wait for long-term / harvest instead). ``min_gain_pct`` is a PERCENT number (20 == 20%).
+    A positive ``min_gain_pct`` requires a computable gain%; at the default 0 a positive gain suffices.
+    Returns ``(rows, summary)``."""
+    acct = (account or "").lower()
+    rows, n_short_term_gain, n_loss = [], 0, 0
+    for lot in lots:
+        if is_cash(lot) or not is_taxable(lot.get("account")):
+            continue
+        if security_key(lot.get("symbol"))["kind"] == "option":
+            continue
+        if acct and acct not in (lot.get("account") or "").lower():
+            continue
+        try:
+            gain = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            continue
+        term = recompute_term(lot, as_of)
+        if gain < 0:
+            n_loss += 1
+            continue
+        if gain > 0 and term == "Short-Term":
+            n_short_term_gain += 1
+            continue
+        if not (gain > 0 and term == "Long-Term"):
+            continue  # zero gain or unknown term: neither a candidate nor an anti-bucket
+        gp = lot.get("gain_loss_pct")
+        if isinstance(gp, (int, float)):
+            gain_pct = float(gp)
+        else:
+            try:
+                b = float(lot.get("cost_basis_total"))
+                gain_pct = (gain / b * 100.0) if b > 0 else None
+            except (TypeError, ValueError):
+                gain_pct = None
+        if min_gain_pct > 0 and (gain_pct is None or gain_pct < min_gain_pct):
+            continue
+        try:
+            value = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            value = None
+        try:
+            basis = float(lot.get("cost_basis_total"))
+        except (TypeError, ValueError):
+            basis = None
+        rows.append({
+            "account": lot.get("account"), "symbol": lot.get("symbol"),
+            "acquired": lot.get("date_acquired") or "", "quantity": lot.get("quantity"),
+            "basis": basis, "value": value, "gain": gain, "gain_pct": gain_pct,
+            "tax_avoided": gain * lt_rate,
+        })
+    rows.sort(key=lambda r: (-(r["gain_pct"] if r["gain_pct"] is not None else -1e18),
+                             -r["gain"], r["symbol"] or ""))
+    summary = {
+        "n_candidates": len(rows),
+        "total_fmv": sum(r["value"] for r in rows if r["value"] is not None),
+        "total_gain": sum(r["gain"] for r in rows),
+        "total_tax_avoided": sum(r["tax_avoided"] for r in rows),
+        "n_short_term_gain": n_short_term_gain,
+        "n_loss": n_loss,
+        "min_gain_pct": min_gain_pct,
+        "lt_rate": lt_rate,
+    }
+    return rows, summary
+
+
+def unrealized_by_account(lots, as_of):
+    """Per-account unrealized gain/loss split short-term vs long-term (informational, NOT tax advice).
+
+    Non-cash lots with a numeric ``gain_loss``; term via ``recompute_term`` (not the stale stored
+    term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl, total_gl,
+    market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
+    by = {}
+    for lot in lots:
+        if is_cash(lot):
+            continue
+        try:
+            gl = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            cv = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            cv = 0.0
+        acct = lot.get("account")
+        rec = by.setdefault(acct, {"account": acct, "taxable": is_taxable(acct),
+                                   "st_gl": 0.0, "lt_gl": 0.0, "total_gl": 0.0, "market_value": 0.0})
+        term = recompute_term(lot, as_of)
+        if term == "Short-Term":
+            rec["st_gl"] += gl
+        elif term == "Long-Term":
+            rec["lt_gl"] += gl
+        rec["total_gl"] += gl
+        rec["market_value"] += cv
+    rows = sorted(by.values(), key=lambda r: r["account"] or "")
+    summary = {
+        "taxable_st": sum(r["st_gl"] for r in rows if r["taxable"]),
+        "taxable_lt": sum(r["lt_gl"] for r in rows if r["taxable"]),
+        "adv_st": sum(r["st_gl"] for r in rows if not r["taxable"]),
+        "adv_lt": sum(r["lt_gl"] for r in rows if not r["taxable"]),
+        "total_gl": sum(r["total_gl"] for r in rows),
+    }
+    return rows, summary
+
+
+def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
+    """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
+
+    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable
+    accounts; ``est_tax = st_gain*st_rate + lt_gain*lt_rate`` (may be negative = a net loss benefit)."""
+    st_gain = lt_gain = 0.0
+    n_lots = 0
+    for lot in lots:
+        if is_cash(lot) or not is_taxable(lot.get("account")):
+            continue
+        try:
+            gl = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            continue
+        term = recompute_term(lot, as_of)
+        if term == "Short-Term":
+            st_gain += gl
+        elif term == "Long-Term":
+            lt_gain += gl
+        else:
+            continue
+        n_lots += 1
+    return {
+        "st_gain": st_gain,
+        "lt_gain": lt_gain,
+        "total_gain": st_gain + lt_gain,
+        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+        "n_lots": n_lots,
+    }

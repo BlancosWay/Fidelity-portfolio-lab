@@ -70,6 +70,9 @@ python scripts/analyze/portfolio.py ripening --within 60          # short-term l
 python scripts/analyze/portfolio.py concentration --top 15        # cross-account concentration + HHI
 python scripts/analyze/portfolio.py sell AAPL 50 --strategy min-tax   # which specific lots to sell (hifo|fifo|loss-first|min-tax)
 python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same-underlying
+python scripts/analyze/portfolio.py capacity --income 40000 --ceiling 50000   # 0% LTCG gain-harvest headroom
+python scripts/analyze/portfolio.py gift --min-gain-pct 20          # appreciated long-term lots best to donate
+python scripts/analyze/portfolio.py dashboard --within 60          # year-end tax snapshot (all tools consolidated)
 ```
 - **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
   cash; ranks short-term losses first (they offset ordinary income).
@@ -87,6 +90,21 @@ python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same
   **CAUTION** for another taxable account; it also prints a forward "don't repurchase within N days"
   reminder and a ±`--window` audit of past sells. Limitation: it only sees the history window you
   export, so `CLEAN` is not a guarantee.
+- **`capacity`** — bracket-aware realized-gain planner over taxable **long-term gain** lots. Fills
+  either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income ceiling you
+  supply, selecting the biggest-gain lots first (final lot taken partially). `--within-rate` (default
+  `0.0`) is the marginal LTCG rate on gains below the ceiling: `0.0` = the **0% long-term bracket**
+  (tax-free); pass your real LTCG rate for an **NIIT/IRMAA** ceiling (avoids the surcharge/tier, but
+  the gain is still taxed). Estimates only, **not tax advice**.
+- **`gift`** — appreciated-lot donor picker. Ranks taxable **long-term** gain lots by gain%
+  (most-appreciated first) as charitable-donation candidates, with the est. cap-gains tax avoided
+  (`--min-gain-pct` filters, e.g. `20`); short-term-gain and loss lots are counted and steered
+  elsewhere (wait for long-term / harvest instead). Estimates only, **not tax advice** — the FMV
+  deduction depends on itemizing and AGI limits.
+- **`dashboard`** — read-only year-end tax snapshot consolidating the other tools: unrealized ST/LT
+  gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+  `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+  — the 0% LTCG realization capacity. Estimates only, **not tax advice**.
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed

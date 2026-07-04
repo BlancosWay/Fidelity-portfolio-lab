@@ -195,5 +195,106 @@ class WashSaleCliTests(unittest.TestCase):
         self.assertIn("CAUTION (replacement buy in a taxable account): 1", caution)
 
 
+class CapacityCliTests(unittest.TestCase):
+    LT_GAIN = _row("Individual - TOD Test", "GAINX", 100, "Jan-05-2024",
+                   "$20.00", "$2,000.00", "$10,000.00", "+$8,000.00", "+400.00%")
+
+    def test_headroom_output(self):
+        db = build_db([self.LT_GAIN])
+        try:
+            text = run(portfolio.cmd_capacity, db, 40000.0, 50000.0, "0% LTCG", None, None, AS_OF, 0.15, 0.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("headroom", text)
+        self.assertIn("GAINX", text)
+        self.assertIn("not tax advice", text)
+
+    def test_target_gain_output(self):
+        db = build_db([self.LT_GAIN])
+        try:
+            text = run(portfolio.cmd_capacity, db, None, None, "0% LTCG", 5000.0, None, AS_OF, 0.15, 0.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("Target realized gain", text)
+
+    def test_help_does_not_crash(self):
+        # argparse %-formats help text, so a bare % in any help string raises ValueError at --help time.
+        for argv in (["--help"], ["capacity", "--help"]):
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                portfolio.main(argv)
+            self.assertEqual(cm.exception.code, 0)
+
+
+class GiftCliTests(unittest.TestCase):
+    def test_output(self):
+        db = build_db([
+            _row("Individual - TOD Test", "DONX", 10, "Jan-05-2024",
+                 "$100.00", "$1,000.00", "$4,000.00", "+$3,000.00", "+300.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_gift, db, 0.0, 20, None, AS_OF, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("DONX", text)
+        self.assertIn("Donation candidates", text)
+        self.assertIn("not tax advice", text)
+
+    def test_gift_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["gift", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_no_candidates_still_steers(self):
+        # Only a short-term gain lot and a long-term loss lot -> no donation candidates, but the
+        # steering counts must still print (they are the whole point of the anti-buckets).
+        db = build_db([
+            _row("Individual - TOD Test", "STG", 10, "Jun-01-2026",
+                 "$100.00", "$1,000.00", "$1,300.00", "+$300.00", "+30.00%"),
+            _row("Individual - TOD Test", "LTL", 10, "Jan-05-2024",
+                 "$200.00", "$2,000.00", "$1,500.00", "-$500.00", "-25.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_gift, db, 0.0, 20, None, AS_OF, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("No taxable long-term appreciated lots", text)
+        self.assertIn("1 short-term gain lot(s)", text)
+        self.assertIn("1 loss lot(s)", text)
+        self.assertIn("not tax advice", text)
+
+
+class DashboardCliTests(unittest.TestCase):
+    ROWS = [
+        _row("Individual - TOD Test", "WIN", 10, "Jan-05-2024",
+             "$100.00", "$1,000.00", "$3,000.00", "+$2,000.00", "+200.00%"),
+        _row("Individual - TOD Test", "STL", 10, "Jun-01-2026",
+             "$100.00", "$1,000.00", "$800.00", "-$200.00", "-20.00%"),
+        _row("Individual - TOD Test", "CASH", "", "", "", "", "$500.00", "", "",
+             desc="Cash HELD IN MONEY MARKET", mc=""),
+    ]
+
+    def test_output(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_dashboard, db, AS_OF, 0.32, 0.15, 60, None, None)
+        finally:
+            os.unlink(db)
+        for token in ("Year-end tax dashboard", "Harvestable", "Ripening", "If sold now", "not tax advice"):
+            self.assertIn(token, text)
+
+    def test_output_with_capacity(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_dashboard, db, AS_OF, 0.32, 0.15, 60, 40000.0, 50000.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("Headroom", text)
+
+    def test_dashboard_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["dashboard", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

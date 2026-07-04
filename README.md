@@ -58,11 +58,15 @@ Real data:
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
 | `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`). |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
+| `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
+| `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
+| `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
-> (default today) applies to `harvest`/`ripening`/`sell`/`washsale`; `--st-rate`/`--lt-rate` (defaults
-> `0.32`/`0.15`) tune the labeled estimates on `harvest`/`ripening`/`sell`.
+> (default today) applies to every tax subcommand (`harvest`/`ripening`/`sell`/`washsale`/`capacity`/
+> `gift`/`dashboard`); `--st-rate`/`--lt-rate` (defaults `0.32`/`0.15`) tune the labeled estimates on the
+> commands that accept them (plus `capacity`'s `--within-rate`).
 >
 > The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches
@@ -74,6 +78,22 @@ Real data:
 > **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 buy (no IRS guidance; prevailing view is the rule
 > does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
 > within N days" reminder and a ±`--window` audit of past sells.
+>
+> `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
+> to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income
+> ceiling you supply. `--within-rate` (default `0.0`) is the marginal LTCG rate on gains realized
+> below the ceiling: `0.0` models the **0% long-term bracket** (tax-free); pass your real LTCG rate
+> for an **NIIT/IRMAA** ceiling, which only avoids the surcharge/tier while the gain is still taxed.
+>
+> `gift` ranks taxable **long-term appreciated** lots (highest gain% first) as charitable-donation
+> candidates — donating appreciated long-term shares avoids the capital-gains tax and (if you itemize)
+> deducts fair market value — and counts short-term-gain and loss lots separately (wait / harvest
+> instead). `--min-gain-pct` (a percent number, e.g. `20`) filters to the most-appreciated lots.
+>
+> `dashboard` is a read-only year-end snapshot that consolidates the other tools: unrealized ST/LT
+> gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+> `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+> — the 0% LTCG realization capacity.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

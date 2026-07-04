@@ -343,6 +343,111 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     print("  [informational, not tax advice]")
 
 
+def cmd_capacity(db_path, income, ceiling, ceiling_label, target_gain, account, as_of, lt_rate, within_rate):
+    picks, s = tax_tools.gain_capacity(fetch_lots(db_path), as_of, income, ceiling, target_gain,
+                                       account, lt_rate, within_rate)
+    if s["n_candidates"] == 0:
+        print("No taxable long-term gain lots to realize.")
+        return
+    if picks:
+        _print_table(
+            ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Part"],
+            [(p["account"], p["symbol"], p["acquired"], round(p["qty_used"], 4),
+              round(p["basis_used"], 2) if p["basis_used"] is not None else "",
+              round(p["value_used"], 2) if p["value_used"] is not None else "",
+              round(p["gain_used"], 2),
+              f"{p['gain_pct']:.2f}%" if p["gain_pct"] is not None else "n/a",
+              "PARTIAL" if p["partial"] else "") for p in picks],
+        )
+    if s["source"] == "inventory-only":
+        print(f"\nLong-term gain inventory (taxable, as of {as_of}): ${s['available_gain']:,.2f} "
+              f"across {s['n_candidates']} lots.")
+        print("  Pass --income and --ceiling (e.g. the 0% LTCG bracket top) or --target-gain to plan a realization.")
+    elif s["source"] == "headroom":
+        print(f"\n{ceiling_label} headroom = ceiling ${s['ceiling']:,.2f} - income ${s['income']:,.2f} "
+              f"= ${s['headroom']:,.2f}.")
+        if s["above_ceiling"]:
+            print("  Income is at/above the ceiling: $0 headroom.")
+        print(f"  Realizing ${s['realized']:,.2f} of long-term gain fills it (constrained by "
+              f"{s['constrained_by']}); leftover LT gain not realized: ${s['leftover_gain']:,.2f}.")
+        print(f"  Est. tax on the realized gain (LT@{within_rate:.0%} below the ceiling): ~${s['est_tax']:,.2f}.")
+        print("  (A 0% LTCG ceiling makes this gain tax-free; an NIIT/IRMAA ceiling only avoids that "
+              "surcharge/tier -- the gain is still taxed at your LTCG rate, so pass --within-rate.)  "
+              "[estimate, not tax advice]")
+    else:  # target-gain
+        print(f"\nTarget realized gain ${s['budget']:,.2f}: realized ${s['realized']:,.2f} "
+              f"(constrained by {s['constrained_by']}).")
+        print(f"  Est. tax on realized (LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
+    print("  Note: realized gains raise MAGI and can affect NIIT/IRMAA; ceilings are the values you "
+          "supply for your tax year.")
+
+
+def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
+    rows, s = tax_tools.gift_candidates(fetch_lots(db_path), as_of, min_gain_pct, account, lt_rate)
+    if rows:
+        _print_table(
+            ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Est Tax Avoided"],
+            [(r["account"], r["symbol"], r["acquired"], r["quantity"],
+              round(r["basis"], 2) if r["basis"] is not None else "",
+              round(r["value"], 2) if r["value"] is not None else "",
+              round(r["gain"], 2),
+              f"{r['gain_pct']:.2f}%" if r["gain_pct"] is not None else "n/a",
+              round(r["tax_avoided"], 2)) for r in rows[:top]],
+        )
+        print(f"\nDonation candidates (taxable long-term gains, as of {as_of}): {s['n_candidates']}.")
+        print(f"  Donatable FMV: ${s['total_fmv']:,.2f}; unrealized LT gain: ${s['total_gain']:,.2f}; "
+              f"est. cap-gains tax avoided if donated (LT@{lt_rate:.0%}): ~${s['total_tax_avoided']:,.2f}.")
+    else:
+        print(f"No taxable long-term appreciated lots at/above the gain threshold (as of {as_of}).")
+    print(f"  {s['n_short_term_gain']} short-term gain lot(s) -> wait for long-term before donating; "
+          f"{s['n_loss']} loss lot(s) -> sell to harvest instead (see 'harvest'/'sell').")
+    print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")
+
+
+def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
+    lots = fetch_lots(db_path)
+    print(f"===== Year-end tax dashboard (as of {as_of}) =====")
+
+    rows, us = tax_tools.unrealized_by_account(lots, as_of)
+    print("\n-- Unrealized gain/loss by account --")
+    if rows:
+        _print_table(
+            ["Account", "Tax", "ST G/L", "LT G/L", "Total", "Mkt Value"],
+            [(r["account"], "taxable" if r["taxable"] else "advantaged",
+              round(r["st_gl"], 2), round(r["lt_gl"], 2), round(r["total_gl"], 2),
+              round(r["market_value"], 2)) for r in rows],
+        )
+        print(f"  Taxable: ST ${us['taxable_st']:,.2f} + LT ${us['taxable_lt']:,.2f}; "
+              f"tax-advantaged: ST ${us['adv_st']:,.2f} + LT ${us['adv_lt']:,.2f}.")
+    else:
+        print("  (no non-cash positions)")
+
+    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate)
+    print("\n-- Harvestable losses (taxable) --")
+    print(f"  Short-Term: {hs['st_lots']} lots, ${hs['st_loss']:,.2f}; "
+          f"Long-Term: {hs['lt_lots']} lots, ${hs['lt_loss']:,.2f}; est. benefit ~${hs['est_benefit']:,.2f}.")
+
+    _, rs = tax_tools.ripening(lots, as_of, st_rate, lt_rate, within)
+    print(f"\n-- Ripening within {within} days --")
+    print(f"  {rs['count']} lots ({rs['winners']} winners, {rs['losers']} losers); "
+          f"est. tax saved by waiting ~${rs['total_tax_saved_by_waiting']:,.2f}.")
+
+    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
+    print("\n-- If sold now (taxable liquidation estimate) --")
+    print(f"  ST gain ${le['st_gain']:,.2f} + LT gain ${le['lt_gain']:,.2f} = ${le['total_gain']:,.2f}; "
+          f"est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${le['est_tax']:,.2f}.")
+
+    print("\n-- 0% LTCG capacity --")
+    if income is not None and ceiling is not None:
+        _, cs = tax_tools.gain_capacity(lots, as_of, income=income, ceiling=ceiling)
+        print(f"  Headroom to ${ceiling:,.2f} at income ${income:,.2f}: ${cs['headroom']:,.2f}; "
+              f"realizable LT gain within it: ${cs['realized']:,.2f} (available ${cs['available_gain']:,.2f}).")
+    else:
+        print("  Pass --income and --ceiling to show 0% LTCG capacity.")
+
+    print("\n[estimates, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -382,6 +487,30 @@ def main(argv=None):
     wp.add_argument("--window", type=int, default=30, help="wash-sale window in days (default 30)")
     wp.add_argument("--same-underlying", action="store_true",
                     help="also match a stock loss against options on the same underlying (and vice versa)")
+    kp = sub.add_parser("capacity", help="bracket-aware realized-gain capacity planner (0%% LTCG / target gain)")
+    kp.add_argument("--income", type=float, help="your taxable income basis for the ceiling headroom")
+    kp.add_argument("--ceiling", type=float, help="income ceiling to stay under (e.g. top of the 0%% LTCG bracket)")
+    kp.add_argument("--ceiling-label", default="0% LTCG", help="name of the ceiling (default '0%% LTCG')")
+    kp.add_argument("--target-gain", type=float, help="realize approximately this much long-term gain instead")
+    kp.add_argument("--account", help="restrict to accounts matching this text")
+    kp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    kp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the target-gain estimate")
+    kp.add_argument("--within-rate", type=float, default=0.0,
+                    help="marginal LTCG rate on gains realized below the ceiling (0.0 = the 0%% LTCG bracket)")
+    gfp = sub.add_parser("gift", help="appreciated-lot donor picker (taxable long-term gains)")
+    gfp.add_argument("--min-gain-pct", type=float, default=0.0,
+                     help="only lots with gain%% >= this (percent number, e.g. 20)")
+    gfp.add_argument("--top", type=int, default=20, help="show the top N candidates (default 20)")
+    gfp.add_argument("--account", help="restrict to accounts matching this text")
+    gfp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    gfp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the tax-avoided estimate")
+    dp = sub.add_parser("dashboard", help="year-end tax snapshot (unrealized, harvest, ripening, liquidation, 0%% LTCG)")
+    dp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    dp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimates")
+    dp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimates")
+    dp.add_argument("--within", type=int, default=60, help="ripening horizon in days (default 60)")
+    dp.add_argument("--income", type=float, help="taxable income for the 0%% LTCG capacity section")
+    dp.add_argument("--ceiling", type=float, help="0%% LTCG bracket top for the capacity section")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -409,6 +538,14 @@ def main(argv=None):
                  _as_of(args.as_of), args.st_rate, args.lt_rate)
     elif args.cmd == "washsale":
         cmd_washsale(args.db, args.history, _as_of(args.as_of), args.window, args.same_underlying)
+    elif args.cmd == "capacity":
+        cmd_capacity(args.db, args.income, args.ceiling, args.ceiling_label, args.target_gain,
+                     args.account, _as_of(args.as_of), args.lt_rate, args.within_rate)
+    elif args.cmd == "gift":
+        cmd_gift(args.db, args.min_gain_pct, args.top, args.account, _as_of(args.as_of), args.lt_rate)
+    elif args.cmd == "dashboard":
+        cmd_dashboard(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate, args.within,
+                      args.income, args.ceiling)
     return 0
 
 

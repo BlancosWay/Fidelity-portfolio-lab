@@ -450,5 +450,184 @@ class WashCategoryTests(unittest.TestCase):
         self.assertEqual(tt.WASH_SEVERITY["taxable"], "CAUTION")
 
 
+class CapacityTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def lt_gain(self, symbol, gain, pct=100.0, account="Individual - TOD Test", qty=100.0):
+        """A synthetic taxable LONG-TERM gain lot (acquired > 1yr before AS_OF)."""
+        value = 2000.0 + gain
+        return lot(account=account, symbol=symbol, quantity=qty, current_value=value,
+                   gain_loss=float(gain), date_acquired="2024-01-15", term="Long-Term",
+                   cost_basis_total=value - gain, avg_cost_basis=(value - gain) / qty, gain_loss_pct=pct)
+
+    def test_headroom_budget_partial_fill(self):
+        lots = [self.lt_gain("GAINA", 8000, pct=400.0), self.lt_gain("GAINB", 5000, pct=100.0)]
+        picks, s = tt.gain_capacity(lots, self.AS_OF, income=40000, ceiling=50000)
+        self.assertEqual(s["source"], "headroom")
+        self.assertEqual(s["budget"], 10000)
+        self.assertAlmostEqual(s["realized"], 10000)
+        self.assertEqual(s["constrained_by"], "budget")
+        self.assertAlmostEqual(s["est_tax"], 0.0)              # default within_rate 0.0 (0% LTCG)
+        self.assertAlmostEqual(s["remaining_budget"], 0.0)
+        self.assertEqual(len(picks), 2)
+        self.assertFalse(picks[0]["partial"])                  # GAINA (biggest gain) whole
+        self.assertTrue(picks[1]["partial"])                   # GAINB partial
+        self.assertAlmostEqual(picks[1]["gain_used"], 2000.0)
+        self.assertAlmostEqual(picks[1]["qty_used"], 40.0)     # 100 * (2000/5000)
+
+    def test_within_rate_taxes_the_gain(self):
+        lots = [self.lt_gain("GAINA", 8000), self.lt_gain("GAINB", 5000)]
+        _, s = tt.gain_capacity(lots, self.AS_OF, income=40000, ceiling=50000, within_rate=0.15)
+        self.assertAlmostEqual(s["est_tax"], 10000 * 0.15)     # NIIT/IRMAA ceiling: gain still taxed
+
+    def test_inventory_constrained(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, income=30000, ceiling=50000)
+        self.assertAlmostEqual(s["realized"], 8000)
+        self.assertEqual(s["constrained_by"], "inventory")
+        self.assertAlmostEqual(s["leftover_gain"], 0.0)
+        self.assertAlmostEqual(s["remaining_budget"], 12000)
+
+    def test_target_gain_mode(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, target_gain=5000)
+        self.assertEqual(s["source"], "target-gain")
+        self.assertAlmostEqual(s["realized"], 5000)
+        self.assertTrue(picks[0]["partial"])
+        self.assertAlmostEqual(s["est_tax"], 5000 * 0.15)
+
+    def test_excludes_non_candidates(self):
+        lots = [
+            self.lt_gain("GAINA", 8000),                                                  # candidate
+            lot(symbol="STGAIN", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000.0, current_value=1500.0, gain_loss=500.0, gain_loss_pct=50.0),
+            lot(symbol="LTLOSS", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=2000.0, current_value=1000.0, gain_loss=-1000.0, gain_loss_pct=-50.0),
+            self.lt_gain("OPTX 30 Call", 3000),                                           # option
+            self.lt_gain("IRAG", 4000, account="Roth IRA Test"),                          # tax-advantaged
+        ]
+        _, s = tt.gain_capacity(lots, self.AS_OF, income=0, ceiling=100000)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertAlmostEqual(s["available_gain"], 8000)
+
+    def test_inventory_only(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000), self.lt_gain("GAINB", 5000)], self.AS_OF)
+        self.assertEqual(picks, [])
+        self.assertEqual(s["source"], "inventory-only")
+        self.assertAlmostEqual(s["available_gain"], 13000)
+        self.assertIsNone(s["est_tax"])
+
+    def test_above_ceiling(self):
+        picks, s = tt.gain_capacity([self.lt_gain("GAINA", 8000)], self.AS_OF, income=60000, ceiling=50000)
+        self.assertEqual(picks, [])
+        self.assertTrue(s["above_ceiling"])
+        self.assertAlmostEqual(s["realized"], 0.0)
+        self.assertEqual(s["budget"], 0.0)
+
+
+class GiftTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def lt(self, symbol, gain, pct, account="Individual - TOD Test", acquired="2024-01-15"):
+        value = 1000.0 + gain
+        return lot(account=account, symbol=symbol, quantity=10.0, current_value=value,
+                   gain_loss=float(gain), date_acquired=acquired, term="Long-Term",
+                   cost_basis_total=value - gain, avg_cost_basis=(value - gain) / 10.0, gain_loss_pct=pct)
+
+    def test_lt_gain_is_candidate(self):
+        rows, s = tt.gift_candidates([self.lt("DON", 300, 30.0)], self.AS_OF)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertAlmostEqual(rows[0]["tax_avoided"], 300 * 0.15)
+        self.assertAlmostEqual(s["total_gain"], 300)
+        self.assertAlmostEqual(s["total_fmv"], 1300)
+
+    def test_min_gain_pct_filters(self):
+        _, s = tt.gift_candidates([self.lt("DON", 300, 30.0)], self.AS_OF, min_gain_pct=40)
+        self.assertEqual(s["n_candidates"], 0)
+
+    def test_short_term_and_loss_excluded_and_counted(self):
+        lots = [
+            self.lt("DON", 300, 30.0),
+            lot(symbol="STG", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000.0, current_value=1300.0, gain_loss=300.0, gain_loss_pct=30.0),
+            lot(symbol="LOSS", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=2000.0, current_value=1500.0, gain_loss=-500.0, gain_loss_pct=-25.0),
+        ]
+        _, s = tt.gift_candidates(lots, self.AS_OF)
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertEqual(s["n_short_term_gain"], 1)
+        self.assertEqual(s["n_loss"], 1)
+
+    def test_option_and_ira_excluded(self):
+        lots = [self.lt("OPT 30 Call", 300, 30.0), self.lt("IRAD", 300, 30.0, account="Roth IRA Test")]
+        _, s = tt.gift_candidates(lots, self.AS_OF)
+        self.assertEqual(s["n_candidates"], 0)
+
+    def test_sort_highest_gain_pct_first(self):
+        rows, _ = tt.gift_candidates([self.lt("LOWP", 900, 20.0), self.lt("HIGHP", 300, 300.0)], self.AS_OF)
+        self.assertEqual([r["symbol"] for r in rows], ["HIGHP", "LOWP"])
+
+    def test_stale_stored_term_recomputed(self):
+        stale = lot(symbol="STALE", date_acquired="2026-06-01", term="Long-Term",
+                    cost_basis_total=1000.0, current_value=1300.0, gain_loss=300.0, gain_loss_pct=30.0)
+        _, s = tt.gift_candidates([stale], self.AS_OF)
+        self.assertEqual(s["n_candidates"], 0)          # recompute_term => Short-Term, not a candidate
+        self.assertEqual(s["n_short_term_gain"], 1)
+
+    def test_uncomputable_pct(self):
+        nopct = lot(symbol="NOPCT", date_acquired="2024-01-01", term="Long-Term",
+                    cost_basis_total=None, current_value=1000.0, gain_loss=1000.0, gain_loss_pct=None)
+        rows, s = tt.gift_candidates([nopct], self.AS_OF)                 # default threshold -> included
+        self.assertEqual(s["n_candidates"], 1)
+        self.assertIsNone(rows[0]["gain_pct"])
+        _, s2 = tt.gift_candidates([nopct], self.AS_OF, min_gain_pct=10)  # positive threshold -> excluded
+        self.assertEqual(s2["n_candidates"], 0)
+
+
+class DashboardTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_unrealized_by_account(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="A", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=1000, current_value=1500, gain_loss=500, gain_loss_pct=50),
+            lot(account="Individual - TOD Test", symbol="B", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000, current_value=800, gain_loss=-200, gain_loss_pct=-20),
+            lot(account="Roth IRA Test", symbol="C", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=500, current_value=900, gain_loss=400, gain_loss_pct=80),
+            lot(account="Individual - TOD Test", symbol="CASH", quantity="", date_acquired="", term="",
+                cost_basis_total=None, current_value=500, gain_loss=None, gain_loss_pct=None,
+                description="Cash HELD IN MONEY MARKET", margin_cash=""),
+        ]
+        rows, s = tt.unrealized_by_account(lots, self.AS_OF)
+        tod = next(r for r in rows if r["account"] == "Individual - TOD Test")
+        self.assertAlmostEqual(tod["lt_gl"], 500)
+        self.assertAlmostEqual(tod["st_gl"], -200)
+        self.assertAlmostEqual(s["taxable_lt"], 500)
+        self.assertAlmostEqual(s["taxable_st"], -200)
+        self.assertAlmostEqual(s["adv_lt"], 400)          # Roth IRA
+        self.assertEqual(len(rows), 2)                    # cash excluded from G/L accounts
+
+    def test_unrealized_stale_stored_term(self):
+        stale = lot(account="Individual - TOD Test", symbol="S", date_acquired="2026-06-01",
+                    term="Long-Term", cost_basis_total=1000, current_value=1200, gain_loss=200, gain_loss_pct=20)
+        _, s = tt.unrealized_by_account([stale], self.AS_OF)
+        self.assertAlmostEqual(s["taxable_st"], 200)      # recompute_term => Short-Term
+        self.assertAlmostEqual(s["taxable_lt"], 0.0)
+
+    def test_liquidation_estimate(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="A", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=1000, current_value=3000, gain_loss=2000, gain_loss_pct=200),
+            lot(account="Individual - TOD Test", symbol="B", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000, current_value=1500, gain_loss=500, gain_loss_pct=50),
+            lot(account="Roth IRA Test", symbol="C", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=500, current_value=900, gain_loss=400, gain_loss_pct=80),
+        ]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["st_gain"], 500)
+        self.assertAlmostEqual(le["lt_gain"], 2000)       # IRA excluded
+        self.assertAlmostEqual(le["est_tax"], 500 * 0.32 + 2000 * 0.15)
+        self.assertEqual(le["n_lots"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
