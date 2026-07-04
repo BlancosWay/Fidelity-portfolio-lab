@@ -492,10 +492,10 @@ def cmd_expiration(db_path, as_of, within, account, top):
         print(f"No dated option positions{suffix}.")
         return
     _print_table(
-        ["Exp", "Days", "Account", "Option", "Contracts", "Premium $", "Money", "AssignCash $"],
+        ["Exp", "Days", "Account", "Option", "Contracts", "AtRisk $", "Money", "AssignCash $"],
         [(r["expiry"], r["days"], r["account"],
           f"{r['underlying']} {r['strike']:g} {r['type'].upper()}", f"{r['contracts']:g}",
-          round(r["premium"], 2), r["moneyness"],
+          round(r["premium_at_risk"], 2), r["moneyness"],
           round(r["assignment_cash"], 2) if r["assignment_cash"] else "") for r in rows[:top]],
     )
     win = within if within is not None else 30

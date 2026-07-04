@@ -737,6 +737,21 @@ def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
 # --- Options (Tier-3) ------------------------------------------------------------------------------
 _OPT_POS_RE = re.compile(r"^([A-Za-z][A-Za-z.]*)\s+(\d+(?:\.\d+)?)\s+(call|put)$", re.IGNORECASE)
 _OPT_OCC_RE = re.compile(r"^-?([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d+(?:\.\d+)?)$")
+# A month-day-year token anywhere in an option Description. Fidelity exports either a bare date
+# ("Jul-17-2026") or the full contract name ("AAPL JAN 16 2026 $250 CALL"); extract the date from both.
+_DATE_TOKEN_RE = re.compile(r"[A-Za-z]{3}[-\s]\d{1,2}[-,\s]+\d{4}")
+
+
+def _option_expiry(description):
+    """Expiry date from an option Description: the whole field when it is a bare date, else the first
+    month-day-year token embedded in a full contract name. Returns a date or None."""
+    if not description:
+        return None
+    d = parse_date(description)
+    if d is not None:
+        return d
+    m = _DATE_TOKEN_RE.search(description)
+    return parse_date(m.group(0)) if m else None
 
 
 def parse_option(lot):
@@ -745,8 +760,9 @@ def parse_option(lot):
     Uses the SAME normalization as ``security_key`` (strip; positions regex on the stripped symbol,
     OCC regex on its uppercase) so any lot ``security_key`` calls an option parses here rather than
     being silently dropped. Positions style ``'AAL 17 Call'`` takes the expiry from the Description
-    column; the OCC/history style ``'-SOFI270115C30'`` packs it in the symbol. ``contracts`` is signed
-    (negative = written/short); ``multiplier`` is the standard 100 shares/contract."""
+    column (a bare date OR a full contract name like ``'AAPL JAN 16 2026 $250 CALL'``); the OCC/history
+    style ``'-SOFI270115C30'`` packs it in the symbol. ``contracts`` is signed (negative = written/short);
+    ``multiplier`` is the standard 100 shares/contract."""
     sym = (lot.get("symbol") or "").strip()
     if security_key(sym)["kind"] != "option":
         return None
@@ -757,7 +773,7 @@ def parse_option(lot):
     m = _OPT_POS_RE.match(sym)
     if m:
         underlying, strike, otype = m.group(1).upper(), float(m.group(2)), m.group(3).lower()
-        expiry = parse_date(lot.get("description"))
+        expiry = _option_expiry(lot.get("description"))
     else:
         m = _OPT_OCC_RE.match(sym.upper())
         if not m:

@@ -668,6 +668,13 @@ class OptionsTests(unittest.TestCase):
     def test_parse_option_non_option_returns_none(self):
         self.assertIsNone(tt.parse_option(stock_lot("AAPL", 10, 1000)))
 
+    def test_parse_option_full_contract_name_description(self):
+        # Fidelity also exports the full contract name as the description; extract the embedded date.
+        po = tt.parse_option(opt_lot("AAPL 250 Call", "AAPL JAN 16 2026 $250 CALL", 2))
+        self.assertEqual(po["underlying"], "AAPL")
+        self.assertEqual(po["strike"], 250.0)
+        self.assertEqual(po["expiry"], dt.date(2026, 1, 16))
+
     def test_parse_option_occ_and_parity(self):
         po = tt.parse_option(opt_lot("-SOFI270115C30", "", 1))
         self.assertEqual(po["underlying"], "SOFI")
