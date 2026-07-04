@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **`concentration` excludes options and non-positive-value symbols from the equity ranking.** An
+  option lot's `current_value` is the premium, not the notional exposure, so ranking it as a single-name
+  equity position overstated diversification risk; options are now dropped from the ranking (count noted,
+  pointing to the `options` command). A symbol whose aggregated value is non-positive (a short position
+  or a corrupt/negative scraped value) is also excluded so a single bad value can no longer make total
+  invested `<= 0` and collapse the whole report to "no positions"; both exclusion counts are printed in
+  the populated and the empty output.
 - **`summary` and `symbol` now recompute the holding term as of a date and are read-only.** The DB
   stores the Long/Short term computed at `load` time, so after a lot crossed its one-year mark the
   reports still showed it as short-term. Both commands now recompute each lot's term from its

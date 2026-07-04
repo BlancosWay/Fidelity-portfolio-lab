@@ -89,7 +89,10 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
 - **`ripening`** — taxable short-term lots and the exact date each becomes long-term; flags short-term
   *losers* to harvest before they ripen.
 - **`concentration`** — aggregates value by symbol across all accounts (cash reported separately);
-  Herfindahl index + single-name flags (`--threshold`, default `0.05`).
+  Herfindahl index + single-name flags (`--threshold`, default `0.05`). Options are excluded from the
+  equity ranking (their value is premium, not notional -- use `options`) and symbols whose aggregated
+  value is non-positive (a short or a corrupt scrape) are excluded so they can't collapse the report;
+  both exclusion counts are noted.
 - **`sell SYMBOL SHARES`** — picks the specific **taxable** lots to sell to minimize tax and prints the
   specific-ID instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
   Tax-advantaged lots (IRA/Roth/HSA/BrokerageLink/529) are excluded (their gains are tax-free), and a

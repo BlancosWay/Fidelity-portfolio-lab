@@ -263,13 +263,20 @@ def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
 
 
 def concentration(lots, top=10, threshold=0.05):
-    """Aggregate current market value by symbol across ALL accounts.
+    """Aggregate current market value by symbol across ALL accounts (single-name equity concentration).
 
-    Cash rows are excluded from the single-name statistics but reported separately. Weights are the
-    fraction of INVESTED (non-cash) value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards
-    the all-cash / zero-invested case (empty rankings, HHI 0, effective positions None, cash 100%)."""
+    Cash rows are excluded from the single-name statistics but reported separately. **Options are
+    excluded** from the equity ranking -- a lot's ``current_value`` is the option *premium*, not the
+    notional exposure, so ranking it as an equity position is misleading (use the ``options`` command);
+    the number of option lots dropped is reported as ``n_options_excluded``. Symbols whose **aggregated
+    value is non-positive** (a short position or a corrupt/negative scrape) are excluded from the ranking
+    and from invested so a single bad value cannot collapse the whole report; the count is reported as
+    ``n_nonpositive_excluded``. Weights are the fraction of INVESTED (non-cash, non-option, positive)
+    value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards the all-cash / zero-invested case
+    (empty rankings, HHI 0, effective positions None, cash 100%)."""
     by_symbol = {}
     cash_total = 0.0
+    n_options_excluded = 0
     for lot in lots:
         try:
             cv = float(lot.get("current_value"))
@@ -279,11 +286,16 @@ def concentration(lots, top=10, threshold=0.05):
             cash_total += cv
             continue
         sym = (lot.get("symbol") or "").strip()
-        s = by_symbol.setdefault(sym, {"symbol": sym, "value": 0.0, "accounts": set(),
-                                       "is_option": security_key(sym)["kind"] == "option"})
+        if security_key(sym)["kind"] == "option":
+            n_options_excluded += 1        # premium != notional exposure; see the `options` command
+            continue
+        s = by_symbol.setdefault(sym, {"symbol": sym, "value": 0.0, "accounts": set()})
         s["value"] += cv
         s["accounts"].add(lot.get("account"))
-    invested = sum(s["value"] for s in by_symbol.values())
+    # Drop symbols whose aggregated value is non-positive (short/corrupt) so `invested` can't collapse.
+    positive = {sym: s for sym, s in by_symbol.items() if s["value"] > 0}
+    n_nonpositive_excluded = len(by_symbol) - len(positive)
+    invested = sum(s["value"] for s in positive.values())
     total = invested + cash_total
     if invested <= 0:  # all-cash / zero-invested guard: empty rankings, HHI 0, effective N/A
         return [], {
@@ -296,16 +308,18 @@ def concentration(lots, top=10, threshold=0.05):
             "effective_positions": None,
             "over_threshold": [],
             "threshold": threshold,
+            "n_options_excluded": n_options_excluded,
+            "n_nonpositive_excluded": n_nonpositive_excluded,
         }
     rows = []
-    for s in by_symbol.values():
+    for s in positive.values():
         w = s["value"] / invested
         rows.append({
             "symbol": s["symbol"],
             "value": s["value"],
             "weight": w,
             "accounts": len(s["accounts"]),
-            "is_option": s["is_option"],
+            "is_option": False,   # options are excluded from the ranking; kept for backward compatibility
             "over_threshold": w > threshold,
         })
     rows.sort(key=lambda r: -r["value"])
@@ -324,6 +338,8 @@ def concentration(lots, top=10, threshold=0.05):
         "effective_positions": (1.0 / hhi) if hhi > 0 else None,
         "over_threshold": [r["symbol"] for r in rows if r["over_threshold"]],
         "threshold": threshold,
+        "n_options_excluded": n_options_excluded,
+        "n_nonpositive_excluded": n_nonpositive_excluded,
     }
     return rows, summary
 

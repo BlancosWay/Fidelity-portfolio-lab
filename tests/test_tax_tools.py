@@ -1107,6 +1107,19 @@ class Tier2ReproTests(unittest.TestCase):
         rows, s = tt.concentration(lots)
         self.assertIn("AAPL", [r["symbol"] for r in rows])          # real position still shown
 
+    def test_bug6_excluded_counts_reported(self):
+        # Both exclusions are counted and the negative symbol is dropped from the ranking.
+        lots = [
+            lot(account="A", symbol="AAPL", current_value=1000.0),
+            lot(account="A", symbol="AAPL 250 Call", current_value=300.0, description="Jul-17-2026"),
+            lot(account="A", symbol="SHORTY", current_value=-200.0),
+        ]
+        rows, s = tt.concentration(lots)
+        self.assertEqual([r["symbol"] for r in rows], ["AAPL"])
+        self.assertEqual(s["n_options_excluded"], 1)
+        self.assertEqual(s["n_nonpositive_excluded"], 1)
+        self.assertTrue(all(r["is_option"] is False for r in rows))   # is_option kept but always False
+
     # Bug 7: a zero-quantity closed lot is not a live position.
     def test_bug7_zero_qty_not_harvestable(self):
         z = lot(account="Individual - TOD Test", symbol="CLOSED", quantity=0.0, current_value=0.0,

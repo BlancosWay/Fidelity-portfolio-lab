@@ -331,8 +331,18 @@ def cmd_concentration(db_path, top, threshold):
     if lots is None:
         return
     rows, s = tax_tools.concentration(lots, top, threshold)
+
+    def _exclusion_notes():
+        if s.get("n_options_excluded"):
+            print(f"  NOTE: {s['n_options_excluded']} option lot(s) excluded from the equity ranking "
+                  "(premium is not notional exposure -- see the `options` command).")
+        if s.get("n_nonpositive_excluded"):
+            print(f"  NOTE: {s['n_nonpositive_excluded']} symbol(s) with non-positive value excluded "
+                  "(short position or corrupt export value).")
+
     if not rows:
-        print(f"No non-cash positions. Cash: ${s['cash_total']:,.2f} (100%).")
+        print(f"No non-cash equity positions. Cash: ${s['cash_total']:,.2f} (100%).")
+        _exclusion_notes()
         return
     _print_table(
         ["Symbol", "Value", "% Inv", "Cum %", "#Acct", "Flag"],
@@ -345,6 +355,7 @@ def cmd_concentration(db_path, top, threshold):
     print(f"  {s['num_positions']} positions; HHI={s['hhi']:.4f}; effective positions={eff}.")
     if s["over_threshold"]:
         print(f"  Over {threshold * 100:.0f}% single-name concentration: {', '.join(s['over_threshold'])}")
+    _exclusion_notes()
 
 
 def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):

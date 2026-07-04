@@ -133,6 +133,37 @@ class ConcentrationCliTests(unittest.TestCase):
         self.assertIn("Invested (non-cash)", text)
         self.assertIn("HHI", text)
 
+    def test_option_exclusion_note_in_table_branch(self):
+        # An equity plus an option: the equity ranks, the option is excluded with a NOTE (Bug 6).
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jan-05-2024",
+                 "$100.00", "$1,000.00", "$5,000.00", "+$4,000.00", "+400.00%"),
+            _row("Individual - TOD Test", "AAPL 250 Call", 2, "Jan-05-2026",
+                 "$3.00", "$600.00", "$1,000.00", "+$400.00", "+66.67%", desc="Jul-17-2026"),
+        ])
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("option lot(s) excluded", text)      # NOTE printed alongside the table
+        self.assertNotIn("AAPL 250 Call", text)            # the option is not a ranked row
+
+    def test_exclusion_notes_in_empty_branch(self):
+        # When every non-cash equity is excluded (here: only an option), the empty-rows branch must
+        # STILL print the exclusion note (Bug 6 -- notes in both branches).
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL 250 Call", 2, "Jan-05-2026",
+                 "$3.00", "$600.00", "$1,000.00", "+$400.00", "+66.67%", desc="Jul-17-2026"),
+            _row("Individual - TOD Test", "CASH", "", "", "", "", "$500.00", "", "",
+                 desc="Cash HELD IN MONEY MARKET", mc=""),
+        ])
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("No non-cash equity positions", text)   # empty-rows branch
+        self.assertIn("option lot(s) excluded", text)         # note still shown
+
 
 SELL_ROWS = [
     _row("Individual - TOD Test", "MULTI", 10, "Jan-05-2026", "$12.00", "$120.00", "$100.00", "-$20.00", "-16.67%"),
