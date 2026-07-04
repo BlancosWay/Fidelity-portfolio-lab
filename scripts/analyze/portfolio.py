@@ -239,8 +239,9 @@ def _as_of(val):
     return dt.date.fromisoformat(val) if val else dt.date.today()
 
 
-def cmd_harvest(db_path, as_of, st_rate, lt_rate):
-    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate)
+def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
+    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate,
+                                offsetting_st_gains, offsetting_lt_gains)
     if not rows:
         print("No harvestable losses in taxable accounts.")
         return
@@ -252,8 +253,11 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate):
     print(f"\nHarvestable losses (taxable accounts, as of {as_of}):")
     print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
     print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
-    print(f"  Estimated tax benefit (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_benefit']:,.2f}"
-          "  [estimate, not tax advice]")
+    print(f"  Estimated current-year tax benefit: ~${s['est_benefit']:,.2f}  [estimate, not tax advice]")
+    print("  (harvested losses first offset realized gains of the same character, then up to $3,000 "
+          "of ordinary income per year; the rest carries forward)")
+    if s["carryforward_loss"] > 0:
+        print(f"  Loss carried forward to future years: ${s['carryforward_loss']:,.2f}")
     if s["has_options"]:
         print("  Note: includes option lots -- verify your own tax treatment for options.")
 
@@ -438,8 +442,13 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
 
     le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
     print("\n-- If sold now (taxable liquidation estimate) --")
-    print(f"  ST gain ${le['st_gain']:,.2f} + LT gain ${le['lt_gain']:,.2f} = ${le['total_gain']:,.2f}; "
-          f"est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${le['est_tax']:,.2f}.")
+    print(f"  ST {le['st_gain']:+,.2f} + LT {le['lt_gain']:+,.2f} = net {le['total_gain']:+,.2f} "
+          f"(ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST and LT netted).")
+    if le["net_loss"] > 0:
+        print(f"  Net capital LOSS: est. current-year benefit ~${-le['est_tax']:,.2f} "
+              f"(${le['deductible_loss']:,.2f} offsets ordinary income; ${le['carryforward']:,.2f} carries forward).")
+    else:
+        print(f"  Est. tax on the net gain: ~${le['est_tax']:,.2f}.")
 
     print("\n-- 0% LTCG capacity --")
     if income is not None and ceiling is not None:
@@ -533,6 +542,10 @@ def main(argv=None):
     hp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     hp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     hp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    hp.add_argument("--offsetting-st-gains", type=float, default=0.0,
+                    help="realized short-term gains these losses can offset (default 0)")
+    hp.add_argument("--offsetting-lt-gains", type=float, default=0.0,
+                    help="realized long-term gains these losses can offset (default 0)")
     rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
     rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     rp.add_argument("--within", type=int, help="only lots ripening within N days")
@@ -605,7 +618,8 @@ def main(argv=None):
             _print_table(list(rows[0].keys()), [tuple(r) for r in rows])
         print(f"({len(rows)} rows)")
     elif args.cmd == "harvest":
-        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate)
+        cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate,
+                    args.offsetting_st_gains, args.offsetting_lt_gains)
     elif args.cmd == "ripening":
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     elif args.cmd == "concentration":

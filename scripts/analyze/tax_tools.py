@@ -148,12 +148,15 @@ def recompute_term(lot, as_of):
     return holding_term(lot_acquired_date(lot), as_of) or (lot.get("term") or "")
 
 
-def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15):
+def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
     """Rank taxable loss lots for harvesting: short-term first (ST losses offset ordinary income),
     then by loss magnitude (most negative first).
 
-    Returns ``(rows, summary)``. ``summary`` keeps signed ST/LT loss totals and a POSITIVE estimated
-    avoided-tax benefit ``abs(st_loss)*st_rate + abs(lt_loss)*lt_rate`` (an estimate, not tax advice)."""
+    Returns ``(rows, summary)``. ``est_benefit`` is the current-year tax reduction from realizing these
+    losses, computed as tax-without minus tax-with via ``_net_capital_tax`` against any known
+    ``offsetting_st_gains``/``offsetting_lt_gains`` (default 0 = no offsetting gains, so the benefit is
+    the $3,000-capped ordinary-income offset). ``carryforward_loss`` is the excess that carries to
+    future years. An estimate, not tax advice."""
     rows = []
     for lot in taxable_loss_candidates(lots):
         rows.append({
@@ -168,15 +171,19 @@ def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15):
             "is_option": security_key(lot.get("symbol"))["kind"] == "option",
         })
     rows.sort(key=lambda r: (0 if r["term"] == "Short-Term" else 1, r["loss"]))
-    st_loss = sum(r["loss"] for r in rows if r["term"] == "Short-Term")
-    lt_loss = sum(r["loss"] for r in rows if r["term"] == "Long-Term")
+    st_loss = sum(r["loss"] for r in rows if r["term"] == "Short-Term")   # <= 0
+    lt_loss = sum(r["loss"] for r in rows if r["term"] == "Long-Term")    # <= 0
+    tax_without = _net_capital_tax(offsetting_st_gains, offsetting_lt_gains, st_rate, lt_rate)
+    tax_with = _net_capital_tax(offsetting_st_gains + st_loss, offsetting_lt_gains + lt_loss,
+                                st_rate, lt_rate)
     summary = {
         "st_loss": st_loss,
         "lt_loss": lt_loss,
         "st_lots": sum(1 for r in rows if r["term"] == "Short-Term"),
         "lt_lots": sum(1 for r in rows if r["term"] == "Long-Term"),
         "total_loss": st_loss + lt_loss,
-        "est_benefit": abs(st_loss) * st_rate + abs(lt_loss) * lt_rate,
+        "est_benefit": tax_without["est_tax"] - tax_with["est_tax"],   # >= 0
+        "carryforward_loss": tax_with["carryforward"],
         "has_options": any(r["is_option"] for r in rows),
     }
     return rows, summary
@@ -711,11 +718,35 @@ def unrealized_by_account(lots, as_of):
     return rows, summary
 
 
+def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15):
+    """Single-year capital-gains tax on signed short-term (``st``) and long-term (``lt``) totals
+    (an estimate, NOT tax advice). Nets ST and LT together: a loss in one bucket first offsets a gain
+    in the other. A residual net GAIN is taxed at the surviving (winning) bucket's rate and is never
+    negative. A residual net LOSS offsets ordinary income up to $3,000/yr at ``st_rate`` (a benefit),
+    with the remainder carried forward. Ignores state tax, NIIT, and wash-sale interactions.
+
+    Returns ``{est_tax, net_gain, net_loss, deductible_loss, carryforward}``."""
+    net = st + lt
+    if net >= 0:
+        if st >= 0 and lt >= 0:
+            est_tax = st * st_rate + lt * lt_rate          # both gains: tax each bucket
+        else:
+            # exactly one bucket is a loss; it fully nets the other, leaving `net` at the winner's rate
+            est_tax = net * (st_rate if st > 0 else lt_rate)
+        return {"est_tax": est_tax, "net_gain": net, "net_loss": 0.0,
+                "deductible_loss": 0.0, "carryforward": 0.0}
+    loss = -net
+    deductible = min(3000.0, loss)
+    return {"est_tax": -(deductible * st_rate), "net_gain": 0.0, "net_loss": loss,
+            "deductible_loss": deductible, "carryforward": loss - deductible}
+
+
 def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
     """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
 
     Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable
-    accounts; ``est_tax = st_gain*st_rate + lt_gain*lt_rate`` (may be negative = a net loss benefit)."""
+    accounts, then nets them via ``_net_capital_tax``: a net gain is taxed (never negative), a net
+    loss yields a benefit capped at the $3,000 ordinary-income offset plus a carryforward."""
     st_gain = lt_gain = 0.0
     n_lots = 0
     for lot in lots:
@@ -733,11 +764,16 @@ def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
         else:
             continue
         n_lots += 1
+    net = _net_capital_tax(st_gain, lt_gain, st_rate, lt_rate)
     return {
         "st_gain": st_gain,
         "lt_gain": lt_gain,
         "total_gain": st_gain + lt_gain,
-        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+        "est_tax": net["est_tax"],
+        "net_gain": net["net_gain"],
+        "net_loss": net["net_loss"],
+        "deductible_loss": net["deductible_loss"],
+        "carryforward": net["carryforward"],
         "n_lots": n_lots,
     }
 

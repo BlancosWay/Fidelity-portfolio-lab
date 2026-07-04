@@ -53,7 +53,7 @@ Real data:
 | `symbol <SYM>` | Per-lot detail + totals for one symbol. |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
-| `harvest [--as-of D] [--st-rate R] [--lt-rate R]` | Tax-loss harvest candidates (taxable accounts, short-term first). |
+| `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + $3k cap. |
 | `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index. |
 | `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded. |

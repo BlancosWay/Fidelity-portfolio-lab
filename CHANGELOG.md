@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **`harvest` benefit and `dashboard` "If sold now" now model capital-loss netting + the $3,000 cap.**
+  Previously each tax figure applied the ST/LT rate to that bucket's signed total independently, so a
+  net capital loss could print a large negative "tax" (a fake refund) and the harvest benefit ignored
+  that a net loss only offsets $3,000 of ordinary income per year. Both now net short-term against
+  long-term first, cap a residual net loss at the $3,000 ordinary-income offset (labeling the rest a
+  carryforward), and never report a negative tax on a net gain. `harvest` gains `--offsetting-st-gains`
+  / `--offsetting-lt-gains` so harvested losses can be valued against known realized gains. Estimates
+  only, not tax advice.
 - **`sell` no longer operates on tax-advantaged accounts.** Lot selection (`hifo`/`fifo`/`loss-first`/
   `min-tax`) now excludes IRA/Roth/HSA/BrokerageLink/529 lots — their gains are tax-free, so the tool
   never recommends selling a retirement lot or charges phantom capital-gains tax on one. A pick that

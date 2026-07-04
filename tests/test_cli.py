@@ -80,8 +80,19 @@ class HarvestCliTests(unittest.TestCase):
         self.assertNotIn("GAINC", text)   # a gain is not harvestable
         self.assertNotIn("LOSSD", text)   # Roth IRA excluded
         self.assertLess(text.index("LOSSA"), text.index("LOSSB"))  # short-term first
-        # estimated benefit = 200*0.32 + 150*0.15 = 86.50
-        self.assertIn("86.50", text)
+        # No offsetting gains: the -350 net loss (200 ST + 150 LT) deducts against ordinary income
+        # (under the $3k cap) at the ordinary rate -> 350 * 0.32 = 112.00.
+        self.assertIn("112.00", text)
+        self.assertIn("not tax advice", text)
+
+    def test_offsetting_lt_gains_uses_lt_rate(self):
+        db = build_db(SAMPLE_ROWS)
+        try:                                            # 150 LT loss offsets an LT gain -> lt_rate
+            text = run(portfolio.cmd_harvest, db, AS_OF, 0.32, 0.15, 0.0, 100000.0)
+        finally:
+            os.unlink(db)
+        # ST loss 200 offsets LT gain at lt_rate too here (net gain path); benefit = 350*0.15 = 52.50
+        self.assertIn("52.50", text)
         self.assertIn("not tax advice", text)
 
 

@@ -114,8 +114,26 @@ class HarvestTests(unittest.TestCase):
         self.assertAlmostEqual(s["st_loss"], -550.0)
         self.assertAlmostEqual(s["lt_loss"], -300.0)
         self.assertEqual((s["st_lots"], s["lt_lots"]), (2, 1))
-        self.assertAlmostEqual(s["est_benefit"], 550 * 0.30 + 300 * 0.20)  # positive avoided tax
+        # No offsetting gains -> the whole -850 net loss deducts against ordinary income (under the
+        # $3k cap) at the ordinary/ST rate: 850 * 0.30 = 255 (the LT portion is NOT valued at lt_rate
+        # when it merely offsets ordinary income).
+        self.assertAlmostEqual(s["est_benefit"], 850 * 0.30)
+        self.assertAlmostEqual(s["carryforward_loss"], 0.0)
         self.assertFalse(s["has_options"])
+
+    def test_benefit_capped_at_3k_without_gains(self):
+        lots = [lot(account="Individual - TOD Test", symbol=f"L{i}", gain_loss=-50000.0,
+                    date_acquired="2024-01-01", term="Long-Term") for i in range(3)]
+        _, s = tt.harvest(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(s["est_benefit"], 3000 * 0.32)          # capped ordinary offset
+        self.assertAlmostEqual(s["carryforward_loss"], 150000 - 3000)  # rest carries forward
+
+    def test_benefit_uses_lt_rate_against_lt_gains(self):
+        # A harvested LT loss that offsets a known LT gain saves only lt_rate, not st_rate.
+        lots = [lot(account="Individual - TOD Test", symbol="LTL", gain_loss=-4000.0,
+                    date_acquired="2024-01-01", term="Long-Term")]
+        _, s = tt.harvest(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15, offsetting_lt_gains=10000.0)
+        self.assertAlmostEqual(s["est_benefit"], 4000 * 0.15)
 
     def test_term_recomputed_from_date(self):
         # Stored term is a stale "Short-Term" but acquired > 1yr before as_of -> recomputed Long-Term.
@@ -679,6 +697,59 @@ class DashboardTests(unittest.TestCase):
         self.assertAlmostEqual(le["lt_gain"], 2000)       # IRA excluded
         self.assertAlmostEqual(le["est_tax"], 500 * 0.32 + 2000 * 0.15)
         self.assertEqual(le["n_lots"], 2)
+
+    def test_liquidation_nets_st_loss_against_lt_gain(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="STL", date_acquired="2026-06-01",
+                term="Short-Term", gain_loss=-10000, current_value=0, cost_basis_total=10000),
+            lot(account="Individual - TOD Test", symbol="LTG", date_acquired="2024-01-01",
+                term="Long-Term", gain_loss=10000, current_value=20000, cost_basis_total=10000),
+        ]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["est_tax"], 0.0)        # ST loss fully offsets LT gain -> ~0, never negative
+        self.assertGreaterEqual(le["est_tax"], 0.0)
+
+    def test_liquidation_net_loss_capped_with_carryforward(self):
+        lots = [lot(account="Individual - TOD Test", symbol="BIGL", date_acquired="2024-01-01",
+                    term="Long-Term", gain_loss=-50000, current_value=0, cost_basis_total=50000)]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["est_tax"], -(3000 * 0.32))   # benefit capped at $3k ordinary offset
+        self.assertAlmostEqual(le["deductible_loss"], 3000)
+        self.assertAlmostEqual(le["carryforward"], 47000)
+
+
+class NetCapitalTaxTests(unittest.TestCase):
+    def test_both_gains(self):
+        r = tt._net_capital_tax(5000, 10000, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 5000 * 0.32 + 10000 * 0.15)
+
+    def test_st_gain_lt_loss_nets_to_winner_rate(self):
+        r = tt._net_capital_tax(5000, -2000, 0.32, 0.15)   # net +3000, ST wins
+        self.assertAlmostEqual(r["est_tax"], 3000 * 0.32)
+        self.assertAlmostEqual(r["net_gain"], 3000)
+
+    def test_lt_gain_st_loss_nets_to_lt_rate(self):
+        r = tt._net_capital_tax(-4000, 10000, 0.32, 0.15)  # net +6000, LT wins
+        self.assertAlmostEqual(r["est_tax"], 6000 * 0.15)
+
+    def test_exact_cancel_is_zero(self):
+        r = tt._net_capital_tax(-10000, 10000, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 0.0)
+
+    def test_net_loss_capped(self):
+        r = tt._net_capital_tax(-1000, -5000, 0.32, 0.15)  # net -6000
+        self.assertAlmostEqual(r["est_tax"], -(3000 * 0.32))
+        self.assertAlmostEqual(r["deductible_loss"], 3000)
+        self.assertAlmostEqual(r["carryforward"], 3000)
+
+    def test_small_net_loss_under_cap(self):
+        r = tt._net_capital_tax(0, -850, 0.30, 0.20)
+        self.assertAlmostEqual(r["est_tax"], -(850 * 0.30))
+        self.assertAlmostEqual(r["carryforward"], 0.0)
+
+    def test_all_zero(self):
+        r = tt._net_capital_tax(0, 0, 0.32, 0.15)
+        self.assertAlmostEqual(r["est_tax"], 0.0)
 
 
 def opt_lot(symbol, expiry_desc, contracts, current_value=1000.0, cost=800.0,

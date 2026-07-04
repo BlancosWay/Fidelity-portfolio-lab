@@ -77,7 +77,9 @@ python scripts/analyze/portfolio.py options --top 15               # options exp
 python scripts/analyze/portfolio.py expiration --within 30         # options expiring within 30 days (premium at risk, moneyness)
 ```
 - **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
-  cash; ranks short-term losses first (they offset ordinary income).
+  cash; ranks short-term losses first (they offset ordinary income). The estimated benefit models
+  single-year capital-loss netting: losses first offset realized gains (`--offsetting-st-gains`/
+  `--offsetting-lt-gains`), then up to $3,000 of ordinary income, with the rest carried forward.
 - **`ripening`** — taxable short-term lots and the exact date each becomes long-term; flags short-term
   *losers* to harvest before they ripen.
 - **`concentration`** — aggregates value by symbol across all accounts (cash reported separately);
@@ -107,7 +109,8 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   deduction depends on itemizing and AGI limits.
 - **`dashboard`** — read-only year-end tax snapshot consolidating the other tools: unrealized ST/LT
   gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
-  `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+  `--within` days, the estimated tax if all taxable lots were sold now (ST and LT netted; a net loss
+  shows the $3,000-capped current-year benefit plus carryforward), and — with `--income`/`--ceiling`
   — the 0% LTCG realization capacity. Estimates only, **not tax advice**.
 - **`options`** — options exposure dashboard. Parses each option lot (`AAL 17 Call` + the expiry from
   the Description column) into underlying/strike/type/expiry; reports premium at risk (current value),
