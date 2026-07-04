@@ -240,8 +240,8 @@ def _as_of(val):
 
 
 def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
-    rows, s = tax_tools.harvest(fetch_lots(db_path), as_of, st_rate, lt_rate,
-                                offsetting_st_gains, offsetting_lt_gains)
+    lots = fetch_lots(db_path)
+    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains)
     if not rows:
         print("No harvestable losses in taxable accounts.")
         return
@@ -258,6 +258,11 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offse
           "of ordinary income per year; the rest carries forward)")
     if s["carryforward_loss"] > 0:
         print(f"  Loss carried forward to future years: ${s['carryforward_loss']:,.2f}")
+    flags = tax_tools.price_dispersion_flags(lots)
+    flagged = sorted({r["symbol"] for r in rows if (r["symbol"] or "").strip().upper() in flags})
+    if flagged:
+        print(f"  WARNING: inconsistent per-share prices for: {', '.join(flagged)}; "
+              "the export may be corrupted -- verify these lots before harvesting.")
     if s["has_options"]:
         print("  Note: includes option lots -- verify your own tax treatment for options.")
 
@@ -297,7 +302,8 @@ def cmd_concentration(db_path, top, threshold):
 
 
 def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
-    picks, s = tax_tools.select_lots(fetch_lots(db_path), symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    lots = fetch_lots(db_path)
+    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate)
     if not picks:
         print(f"No sellable taxable lots found for {s['symbol']}"
               + (f" in accounts matching '{account}'." if account else " (tax-advantaged lots are excluded)."))
@@ -314,6 +320,10 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
     if s["multi_account"]:
         print("  NOTE: picks span multiple accounts; specific-ID sales are per-account -- "
               "place one order per account.")
+    disp = tax_tools.price_dispersion_flags(lots).get(s["symbol"])
+    if disp:
+        print(f"  WARNING: {s['symbol']} lots show inconsistent per-share prices "
+              f"(${disp['min']:,.2f}..${disp['max']:,.2f}); the export may be corrupted -- verify before acting.")
     print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
     print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
     print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")

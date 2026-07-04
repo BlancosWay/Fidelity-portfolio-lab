@@ -115,6 +115,33 @@ def safe_per_share(lot):
     return v / q
 
 
+def price_dispersion_flags(lots, tol=0.02):
+    """Symbols whose per-share price (``safe_per_share`` = current_value/quantity) is INCONSISTENT
+    across their lots -- a known Fidelity browser-scrape corruption. All lots of a symbol share one
+    market price, so any real spread is a data-quality problem the caller should warn about (this
+    detector never alters numbers).
+
+    Returns ``{symbol: {"min": .., "max": .., "spread": ..}}`` for each non-cash, non-option symbol
+    with >=2 priced lots whose relative spread ``(max-min)/max`` exceeds ``tol`` (computed only when
+    ``max > 0``)."""
+    prices = {}
+    for lot in lots:
+        if is_cash(lot) or security_key(lot.get("symbol"))["kind"] == "option":
+            continue
+        sp = safe_per_share(lot)
+        if sp is None:
+            continue
+        prices.setdefault((lot.get("symbol") or "").strip().upper(), []).append(sp)
+    flags = {}
+    for sym, ps in prices.items():
+        if len(ps) < 2:
+            continue
+        lo, hi = min(ps), max(ps)
+        if hi > 0 and (hi - lo) / hi > tol:
+            flags[sym] = {"min": lo, "max": hi, "spread": (hi - lo) / hi}
+    return flags
+
+
 def taxable_loss_candidates(lots):
     """Lots eligible for tax-loss harvesting: taxable account, unrealized loss (gain_loss < 0),
     excluding cash rows. Returned in input order (callers sort)."""

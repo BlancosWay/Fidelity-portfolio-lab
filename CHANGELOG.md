@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **`sell` and `harvest` now warn on inconsistent per-share prices.** The browser export can carry
+  different `current_value/quantity` across lots of the same symbol (a scrape corruption); the tax
+  tools previously trusted these silently and could surface a phantom loss. A new detector flags any
+  symbol whose per-share price disagrees across its lots, and `sell`/`harvest` print a warning to
+  verify before acting (the numbers themselves are unchanged).
 - **`options`/`expiration` no longer count already-expired contracts as live.** Options whose expiry
   is before the as-of date are excluded from `options` exposure (premium/notional/bias/coverage; the
   count of excluded lots is noted), and from `expiration`'s live/soon/assignment metrics and

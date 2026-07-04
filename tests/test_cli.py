@@ -95,6 +95,18 @@ class HarvestCliTests(unittest.TestCase):
         self.assertIn("52.50", text)
         self.assertIn("not tax advice", text)
 
+    def test_price_dispersion_warning_case_insensitive(self):
+        # A lowercase-symbol loss lot with inconsistent per-share prices must still warn.
+        db = build_db([
+            _row("Individual - TOD Test", "disp", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$100.00", "-$900.00", "-90.00%"),
+            _row("Individual - TOD Test", "disp", 5, "Jan-05-2024", "$100.00", "$500.00", "$500.00", "$0.00", "0.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_harvest, db, AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("inconsistent per-share prices", text)
+
 
 class RipeningCliTests(unittest.TestCase):
     def test_output(self):
@@ -159,6 +171,18 @@ class SellCliTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             portfolio.main(["sell", "--help"])
         self.assertEqual(cm.exception.code, 0)
+
+    def test_price_dispersion_warning(self):
+        # Same symbol, inconsistent per-share (scrape corruption): $200/sh vs $10/sh.
+        db = build_db([
+            _row("Individual - TOD Test", "DISP", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$2,000.00", "+$1,000.00", "+100.00%"),
+            _row("Individual - TOD Test", "DISP", 10, "Jan-05-2024", "$100.00", "$1,000.00", "$100.00", "-$900.00", "-90.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "DISP", 10, None, "loss-first", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("inconsistent per-share prices", text)
 
 
 HIST_HEADER = ("Run Date,Account,Account Number,Action,Symbol,Description,Type,Exchange Quantity,"

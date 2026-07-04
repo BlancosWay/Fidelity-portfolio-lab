@@ -1021,5 +1021,41 @@ class Tier1ReproTests(unittest.TestCase):
         self.assertIn("AAPL", flags)
 
 
+class PriceDispersionTests(unittest.TestCase):
+    def _lot(self, symbol, qty, value):
+        return lot(account="Individual - TOD Test", symbol=symbol, quantity=float(qty),
+                   current_value=float(value), gain_loss=0.0, date_acquired="2024-01-01",
+                   term="Long-Term", cost_basis_total=float(value), avg_cost_basis=1.0, gain_loss_pct=0.0)
+
+    def test_consistent_prices_not_flagged(self):
+        lots = [self._lot("AAPL", 10, 2000), self._lot("AAPL", 5, 1000)]   # both $200/sh
+        self.assertEqual(tt.price_dispersion_flags(lots), {})
+
+    def test_inconsistent_prices_flagged(self):
+        lots = [self._lot("AAPL", 10, 2000), self._lot("AAPL", 10, 100)]   # $200 vs $10
+        flags = tt.price_dispersion_flags(lots)
+        self.assertIn("AAPL", flags)
+        self.assertAlmostEqual(flags["AAPL"]["min"], 10.0)
+        self.assertAlmostEqual(flags["AAPL"]["max"], 200.0)
+
+    def test_single_lot_not_flagged(self):
+        self.assertEqual(tt.price_dispersion_flags([self._lot("AAPL", 10, 2000)]), {})
+
+    def test_options_and_cash_ignored(self):
+        lots = [
+            lot(account="A", symbol="AAA 20 Call", quantity=2, current_value=1600, description="Jul-17-2026",
+                gain_loss=0.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=1600,
+                avg_cost_basis=8.0, gain_loss_pct=0.0),
+            lot(account="A", symbol="AAA 20 Call", quantity=1, current_value=100, description="Jul-17-2026",
+                gain_loss=0.0, date_acquired="2026-06-01", term="Short-Term", cost_basis_total=100,
+                avg_cost_basis=1.0, gain_loss_pct=0.0),
+        ]
+        self.assertEqual(tt.price_dispersion_flags(lots), {})   # options are not price-checked
+
+    def test_zero_price_no_crash(self):
+        lots = [self._lot("AAPL", 10, 0), self._lot("AAPL", 5, 0)]   # all zero -> max==0, no flag, no crash
+        self.assertEqual(tt.price_dispersion_flags(lots), {})
+
+
 if __name__ == "__main__":
     unittest.main()
