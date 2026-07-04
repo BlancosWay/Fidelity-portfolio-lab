@@ -404,6 +404,50 @@ def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
     print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")
 
 
+def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
+    lots = fetch_lots(db_path)
+    print(f"===== Year-end tax dashboard (as of {as_of}) =====")
+
+    rows, us = tax_tools.unrealized_by_account(lots, as_of)
+    print("\n-- Unrealized gain/loss by account --")
+    if rows:
+        _print_table(
+            ["Account", "Tax", "ST G/L", "LT G/L", "Total", "Mkt Value"],
+            [(r["account"], "taxable" if r["taxable"] else "advantaged",
+              round(r["st_gl"], 2), round(r["lt_gl"], 2), round(r["total_gl"], 2),
+              round(r["market_value"], 2)) for r in rows],
+        )
+        print(f"  Taxable: ST ${us['taxable_st']:,.2f} + LT ${us['taxable_lt']:,.2f}; "
+              f"tax-advantaged: ST ${us['adv_st']:,.2f} + LT ${us['adv_lt']:,.2f}.")
+    else:
+        print("  (no non-cash positions)")
+
+    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate)
+    print("\n-- Harvestable losses (taxable) --")
+    print(f"  Short-Term: {hs['st_lots']} lots, ${hs['st_loss']:,.2f}; "
+          f"Long-Term: {hs['lt_lots']} lots, ${hs['lt_loss']:,.2f}; est. benefit ~${hs['est_benefit']:,.2f}.")
+
+    _, rs = tax_tools.ripening(lots, as_of, st_rate, lt_rate, within)
+    print(f"\n-- Ripening within {within} days --")
+    print(f"  {rs['count']} lots ({rs['winners']} winners, {rs['losers']} losers); "
+          f"est. tax saved by waiting ~${rs['total_tax_saved_by_waiting']:,.2f}.")
+
+    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
+    print("\n-- If sold now (taxable liquidation estimate) --")
+    print(f"  ST gain ${le['st_gain']:,.2f} + LT gain ${le['lt_gain']:,.2f} = ${le['total_gain']:,.2f}; "
+          f"est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${le['est_tax']:,.2f}.")
+
+    print("\n-- 0% LTCG capacity --")
+    if income is not None and ceiling is not None:
+        _, cs = tax_tools.gain_capacity(lots, as_of, income=income, ceiling=ceiling)
+        print(f"  Headroom to ${ceiling:,.2f} at income ${income:,.2f}: ${cs['headroom']:,.2f}; "
+              f"realizable LT gain within it: ${cs['realized']:,.2f} (available ${cs['available_gain']:,.2f}).")
+    else:
+        print("  Pass --income and --ceiling to show 0% LTCG capacity.")
+
+    print("\n[estimates, not tax advice]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -460,6 +504,13 @@ def main(argv=None):
     gfp.add_argument("--account", help="restrict to accounts matching this text")
     gfp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     gfp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the tax-avoided estimate")
+    dp = sub.add_parser("dashboard", help="year-end tax snapshot (unrealized, harvest, ripening, liquidation, 0%% LTCG)")
+    dp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
+    dp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimates")
+    dp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimates")
+    dp.add_argument("--within", type=int, default=60, help="ripening horizon in days (default 60)")
+    dp.add_argument("--income", type=float, help="taxable income for the 0%% LTCG capacity section")
+    dp.add_argument("--ceiling", type=float, help="0%% LTCG bracket top for the capacity section")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -492,6 +543,9 @@ def main(argv=None):
                      args.account, _as_of(args.as_of), args.lt_rate, args.within_rate)
     elif args.cmd == "gift":
         cmd_gift(args.db, args.min_gain_pct, args.top, args.account, _as_of(args.as_of), args.lt_rate)
+    elif args.cmd == "dashboard":
+        cmd_dashboard(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate, args.within,
+                      args.income, args.ceiling)
     return 0
 
 

@@ -60,6 +60,7 @@ Real data:
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
+| `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
@@ -87,6 +88,11 @@ Real data:
 > candidates — donating appreciated long-term shares avoids the capital-gains tax and (if you itemize)
 > deducts fair market value — and counts short-term-gain and loss lots separately (wait / harvest
 > instead). `--min-gain-pct` (a percent number, e.g. `20`) filters to the most-appreciated lots.
+>
+> `dashboard` is a read-only year-end snapshot that consolidates the other tools: unrealized ST/LT
+> gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+> `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+> — the 0% LTCG realization capacity.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

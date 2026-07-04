@@ -582,5 +582,52 @@ class GiftTests(unittest.TestCase):
         self.assertEqual(s2["n_candidates"], 0)
 
 
+class DashboardTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_unrealized_by_account(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="A", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=1000, current_value=1500, gain_loss=500, gain_loss_pct=50),
+            lot(account="Individual - TOD Test", symbol="B", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000, current_value=800, gain_loss=-200, gain_loss_pct=-20),
+            lot(account="Roth IRA Test", symbol="C", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=500, current_value=900, gain_loss=400, gain_loss_pct=80),
+            lot(account="Individual - TOD Test", symbol="CASH", quantity="", date_acquired="", term="",
+                cost_basis_total=None, current_value=500, gain_loss=None, gain_loss_pct=None,
+                description="Cash HELD IN MONEY MARKET", margin_cash=""),
+        ]
+        rows, s = tt.unrealized_by_account(lots, self.AS_OF)
+        tod = next(r for r in rows if r["account"] == "Individual - TOD Test")
+        self.assertAlmostEqual(tod["lt_gl"], 500)
+        self.assertAlmostEqual(tod["st_gl"], -200)
+        self.assertAlmostEqual(s["taxable_lt"], 500)
+        self.assertAlmostEqual(s["taxable_st"], -200)
+        self.assertAlmostEqual(s["adv_lt"], 400)          # Roth IRA
+        self.assertEqual(len(rows), 2)                    # cash excluded from G/L accounts
+
+    def test_unrealized_stale_stored_term(self):
+        stale = lot(account="Individual - TOD Test", symbol="S", date_acquired="2026-06-01",
+                    term="Long-Term", cost_basis_total=1000, current_value=1200, gain_loss=200, gain_loss_pct=20)
+        _, s = tt.unrealized_by_account([stale], self.AS_OF)
+        self.assertAlmostEqual(s["taxable_st"], 200)      # recompute_term => Short-Term
+        self.assertAlmostEqual(s["taxable_lt"], 0.0)
+
+    def test_liquidation_estimate(self):
+        lots = [
+            lot(account="Individual - TOD Test", symbol="A", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=1000, current_value=3000, gain_loss=2000, gain_loss_pct=200),
+            lot(account="Individual - TOD Test", symbol="B", date_acquired="2026-06-01", term="Short-Term",
+                cost_basis_total=1000, current_value=1500, gain_loss=500, gain_loss_pct=50),
+            lot(account="Roth IRA Test", symbol="C", date_acquired="2024-01-01", term="Long-Term",
+                cost_basis_total=500, current_value=900, gain_loss=400, gain_loss_pct=80),
+        ]
+        le = tt.liquidation_estimate(lots, self.AS_OF, st_rate=0.32, lt_rate=0.15)
+        self.assertAlmostEqual(le["st_gain"], 500)
+        self.assertAlmostEqual(le["lt_gain"], 2000)       # IRA excluded
+        self.assertAlmostEqual(le["est_tax"], 500 * 0.32 + 2000 * 0.15)
+        self.assertEqual(le["n_lots"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

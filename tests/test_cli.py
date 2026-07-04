@@ -245,5 +245,38 @@ class GiftCliTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, 0)
 
 
+class DashboardCliTests(unittest.TestCase):
+    ROWS = [
+        _row("Individual - TOD Test", "WIN", 10, "Jan-05-2024",
+             "$100.00", "$1,000.00", "$3,000.00", "+$2,000.00", "+200.00%"),
+        _row("Individual - TOD Test", "STL", 10, "Jun-01-2026",
+             "$100.00", "$1,000.00", "$800.00", "-$200.00", "-20.00%"),
+        _row("Individual - TOD Test", "CASH", "", "", "", "", "$500.00", "", "",
+             desc="Cash HELD IN MONEY MARKET", mc=""),
+    ]
+
+    def test_output(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_dashboard, db, AS_OF, 0.32, 0.15, 60, None, None)
+        finally:
+            os.unlink(db)
+        for token in ("Year-end tax dashboard", "Harvestable", "Ripening", "If sold now", "not tax advice"):
+            self.assertIn(token, text)
+
+    def test_output_with_capacity(self):
+        db = build_db(self.ROWS)
+        try:
+            text = run(portfolio.cmd_dashboard, db, AS_OF, 0.32, 0.15, 60, 40000.0, 50000.0)
+        finally:
+            os.unlink(db)
+        self.assertIn("Headroom", text)
+
+    def test_dashboard_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["dashboard", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

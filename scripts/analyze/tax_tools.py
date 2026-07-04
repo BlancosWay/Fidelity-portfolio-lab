@@ -662,3 +662,73 @@ def gift_candidates(lots, as_of, min_gain_pct=0.0, account=None, lt_rate=0.15):
         "lt_rate": lt_rate,
     }
     return rows, summary
+
+
+def unrealized_by_account(lots, as_of):
+    """Per-account unrealized gain/loss split short-term vs long-term (informational, NOT tax advice).
+
+    Non-cash lots with a numeric ``gain_loss``; term via ``recompute_term`` (not the stale stored
+    term). Returns ``(rows, summary)`` where each row has account, taxable, st_gl, lt_gl, total_gl,
+    market_value, and the summary carries taxable/tax-advantaged ST/LT subtotals + total_gl."""
+    by = {}
+    for lot in lots:
+        if is_cash(lot):
+            continue
+        try:
+            gl = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            continue
+        try:
+            cv = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            cv = 0.0
+        acct = lot.get("account")
+        rec = by.setdefault(acct, {"account": acct, "taxable": is_taxable(acct),
+                                   "st_gl": 0.0, "lt_gl": 0.0, "total_gl": 0.0, "market_value": 0.0})
+        term = recompute_term(lot, as_of)
+        if term == "Short-Term":
+            rec["st_gl"] += gl
+        elif term == "Long-Term":
+            rec["lt_gl"] += gl
+        rec["total_gl"] += gl
+        rec["market_value"] += cv
+    rows = sorted(by.values(), key=lambda r: r["account"] or "")
+    summary = {
+        "taxable_st": sum(r["st_gl"] for r in rows if r["taxable"]),
+        "taxable_lt": sum(r["lt_gl"] for r in rows if r["taxable"]),
+        "adv_st": sum(r["st_gl"] for r in rows if not r["taxable"]),
+        "adv_lt": sum(r["lt_gl"] for r in rows if not r["taxable"]),
+        "total_gl": sum(r["total_gl"] for r in rows),
+    }
+    return rows, summary
+
+
+def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
+    """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
+
+    Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable
+    accounts; ``est_tax = st_gain*st_rate + lt_gain*lt_rate`` (may be negative = a net loss benefit)."""
+    st_gain = lt_gain = 0.0
+    n_lots = 0
+    for lot in lots:
+        if is_cash(lot) or not is_taxable(lot.get("account")):
+            continue
+        try:
+            gl = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            continue
+        term = recompute_term(lot, as_of)
+        if term == "Short-Term":
+            st_gain += gl
+        elif term == "Long-Term":
+            lt_gain += gl
+        else:
+            continue
+        n_lots += 1
+    return {
+        "st_gain": st_gain,
+        "lt_gain": lt_gain,
+        "total_gain": st_gain + lt_gain,
+        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+        "n_lots": n_lots,
+    }

@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     charitable-donation candidates (donating appreciated long-term shares avoids the capital-gains
     tax and deducts FMV if you itemize), with the est. cap-gains tax avoided; short-term-gain and
     loss lots are counted and steered elsewhere. `--min-gain-pct` filters to the most-appreciated lots.
+  - `dashboard` — read-only year-end tax snapshot consolidating the Tier-1/Tier-2 tools: unrealized
+    ST/LT gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+    `--within` days, the estimated tax if all taxable lots were sold now, and (with `--income`/`--ceiling`)
+    the 0% LTCG realization capacity.
 - **Tier-1 tax/portfolio tools** — five new read-only `portfolio.py` subcommands (stdlib only; all
   dollar/tax figures are estimates, not tax advice):
   - `harvest` — tax-loss harvest candidates in taxable accounts, short-term losses first.

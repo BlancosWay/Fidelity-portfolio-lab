@@ -72,6 +72,7 @@ python scripts/analyze/portfolio.py sell AAPL 50 --strategy min-tax   # which sp
 python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same-underlying
 python scripts/analyze/portfolio.py capacity --income 40000 --ceiling 50000   # 0% LTCG gain-harvest headroom
 python scripts/analyze/portfolio.py gift --min-gain-pct 20          # appreciated long-term lots best to donate
+python scripts/analyze/portfolio.py dashboard --within 60          # year-end tax snapshot (all tools consolidated)
 ```
 - **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
   cash; ranks short-term losses first (they offset ordinary income).
@@ -100,6 +101,10 @@ python scripts/analyze/portfolio.py gift --min-gain-pct 20          # appreciate
   (`--min-gain-pct` filters, e.g. `20`); short-term-gain and loss lots are counted and steered
   elsewhere (wait for long-term / harvest instead). Estimates only, **not tax advice** — the FMV
   deduction depends on itemizing and AGI limits.
+- **`dashboard`** — read-only year-end tax snapshot consolidating the other tools: unrealized ST/LT
+  gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
+  `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
+  — the 0% LTCG realization capacity. Estimates only, **not tax advice**.
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed
