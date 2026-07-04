@@ -71,6 +71,8 @@ Real data:
 > commands that accept them (plus `capacity`'s `--within-rate`).
 >
 > The tax tools are **read-only** and every dollar/tax figure is an **estimate, not tax advice**.
+> A command run before any `load` (or against a since-deleted DB) never creates or writes a file — it
+> prints `No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (`query` with a non-zero code).
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches
 > IRA/Roth/HSA/BrokerageLink/401k/403b/529 is treated as tax-advantaged and excluded, and every other
 > account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the

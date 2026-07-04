@@ -98,6 +98,24 @@ def fetch_lots(db_path=DEFAULT_DB):
         conn.close()
 
 
+def _no_portfolio_hint(db_path):
+    """Print a friendly 'run load first' message (used when the DB is missing/unloaded)."""
+    print(f"No portfolio loaded at {db_path}.\n"
+          f"  Run: python scripts/analyze/portfolio.py --db {db_path} load <lots.csv>")
+
+
+def read_lots(db_path=DEFAULT_DB):
+    """Read lots strictly read-only, or print a friendly hint and return None when the DB is missing or
+    has never been loaded. Never creates the DB file (unlike a read-write connect). Every read-only
+    report/analysis command routes through this so a missing DB yields a hint, not a traceback."""
+    try:
+        return fetch_lots(db_path)
+    except sqlite3.OperationalError:
+        # missing file ("unable to open database file") or never loaded ("no such table: lots")
+        _no_portfolio_hint(db_path)
+        return None
+
+
 # --------------------------------------------------------------------------- load
 def load(csv_path, db_path=DEFAULT_DB, as_of=None):
     as_of = as_of or dt.date.today()
@@ -161,9 +179,19 @@ def _validate_query(sql):
 
 def run_query(db_path, sql):
     stmt = _validate_query(sql)
-    conn = readonly_connection(db_path)
+    try:
+        conn = readonly_connection(db_path)
+    except sqlite3.OperationalError:
+        _no_portfolio_hint(db_path)
+        return None
     try:
         return conn.execute(stmt).fetchall()
+    except sqlite3.OperationalError as e:
+        if str(e).lower() == "no such table: lots":
+            _no_portfolio_hint(db_path)   # DB file exists but was never loaded
+        else:
+            print(f"Query error: {e}")    # genuine SQL error (bad column/other table/etc.)
+        return None
     finally:
         conn.close()
 
@@ -226,11 +254,17 @@ def symbol_detail(db_path, sym):
 
 
 def accounts_list(db_path):
-    conn = _connect(db_path)
-    rows = conn.execute(
-        "SELECT account, COUNT(*) lots, COUNT(DISTINCT symbol) symbols FROM lots GROUP BY account ORDER BY account").fetchall()
-    _print_table(["Account", "Lots", "Symbols"], [tuple(r) for r in rows])
-    conn.close()
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    agg = {}
+    for lot in lots:
+        acct = lot.get("account")
+        a = agg.setdefault(acct, {"lots": 0, "symbols": set()})
+        a["lots"] += 1
+        a["symbols"].add((lot.get("symbol") or "").strip())
+    rows = [(acct, a["lots"], len(a["symbols"])) for acct, a in sorted(agg.items(), key=lambda kv: kv[0] or "")]
+    _print_table(["Account", "Lots", "Symbols"], rows)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -240,7 +274,9 @@ def _as_of(val):
 
 
 def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
-    lots = fetch_lots(db_path)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
     rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains)
     if not rows:
         print("No harvestable losses in taxable accounts.")
@@ -268,7 +304,10 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offse
 
 
 def cmd_ripening(db_path, as_of, within, st_rate, lt_rate):
-    rows, s = tax_tools.ripening(fetch_lots(db_path), as_of, st_rate, lt_rate, within)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    rows, s = tax_tools.ripening(lots, as_of, st_rate, lt_rate, within)
     if not rows:
         print("No taxable short-term lots ripening" + (f" within {within} days." if within else "."))
         return
@@ -284,7 +323,10 @@ def cmd_ripening(db_path, as_of, within, st_rate, lt_rate):
 
 
 def cmd_concentration(db_path, top, threshold):
-    rows, s = tax_tools.concentration(fetch_lots(db_path), top, threshold)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    rows, s = tax_tools.concentration(lots, top, threshold)
     if not rows:
         print(f"No non-cash positions. Cash: ${s['cash_total']:,.2f} (100%).")
         return
@@ -302,7 +344,9 @@ def cmd_concentration(db_path, top, threshold):
 
 
 def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
-    lots = fetch_lots(db_path)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
     picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate)
     if not picks:
         print(f"No sellable taxable lots found for {s['symbol']}"
@@ -330,7 +374,10 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
 
 
 def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
-    candidates = tax_tools.taxable_loss_candidates(fetch_lots(db_path))
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    candidates = tax_tools.taxable_loss_candidates(lots)
     res = tax_tools.washsale(candidates, history.load_history(history_path), as_of, window, same_underlying)
     c, s = res["candidates"], res["summary"]
     if c:
@@ -362,7 +409,10 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
 
 
 def cmd_capacity(db_path, income, ceiling, ceiling_label, target_gain, account, as_of, lt_rate, within_rate):
-    picks, s = tax_tools.gain_capacity(fetch_lots(db_path), as_of, income, ceiling, target_gain,
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    picks, s = tax_tools.gain_capacity(lots, as_of, income, ceiling, target_gain,
                                        account, lt_rate, within_rate)
     if s["n_candidates"] == 0:
         print("No taxable long-term gain lots to realize.")
@@ -401,7 +451,10 @@ def cmd_capacity(db_path, income, ceiling, ceiling_label, target_gain, account, 
 
 
 def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
-    rows, s = tax_tools.gift_candidates(fetch_lots(db_path), as_of, min_gain_pct, account, lt_rate)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    rows, s = tax_tools.gift_candidates(lots, as_of, min_gain_pct, account, lt_rate)
     if rows:
         _print_table(
             ["Account", "Symbol", "Acquired", "Qty", "Basis", "Value", "Gain $", "Gain %", "Est Tax Avoided"],
@@ -423,7 +476,9 @@ def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
 
 
 def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
-    lots = fetch_lots(db_path)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
     print(f"===== Year-end tax dashboard (as of {as_of}) =====")
 
     rows, us = tax_tools.unrealized_by_account(lots, as_of)
@@ -472,7 +527,10 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
 
 
 def cmd_options(db_path, as_of, account, top):
-    positions, by_u, s = tax_tools.options_exposure(fetch_lots(db_path), as_of, account)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    positions, by_u, s = tax_tools.options_exposure(lots, as_of, account)
     if not positions:
         msg = "No live option positions found."
         if s.get("n_expired_excluded"):
@@ -514,7 +572,10 @@ def cmd_options(db_path, as_of, account, top):
 
 
 def cmd_expiration(db_path, as_of, within, account, top):
-    rows, s = tax_tools.expiration_calendar(fetch_lots(db_path), as_of, within, account)
+    lots = read_lots(db_path)
+    if lots is None:
+        return
+    rows, s = tax_tools.expiration_calendar(lots, as_of, within, account)
     if not rows:
         suffix = f" within {within} days" if within is not None else ""
         print(f"No dated option positions{suffix}.")
@@ -629,6 +690,8 @@ def main(argv=None):
         accounts_list(args.db)
     elif args.cmd == "query":
         rows = run_query(args.db, args.sql)
+        if rows is None:
+            return 1   # missing/unloaded DB: run_query already printed the hint
         if rows:
             _print_table(list(rows[0].keys()), [tuple(r) for r in rows])
         print(f"({len(rows)} rows)")

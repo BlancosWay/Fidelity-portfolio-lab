@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **Analysis commands are strictly read-only and fail gracefully on a missing portfolio.** Running any
+  command against a never-loaded (or since-deleted) DB previously either created a 0-byte SQLite file
+  or raised a raw `sqlite3` traceback. Every command now opens the DB read-only, and on a missing file
+  or missing `lots` table prints a one-line hint (`No portfolio loaded at <db>. Run: ... load <lots.csv>`)
+  and exits without creating anything. `query` returns a non-zero exit code in that case.
 - **`sell` and `harvest` now warn on inconsistent per-share prices.** The browser export can carry
   different `current_value/quantity` across lots of the same symbol (a scrape corruption); the tax
   tools previously trusted these silently and could surface a phantom loss. A new detector flags any

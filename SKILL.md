@@ -59,7 +59,9 @@ python scripts/analyze/portfolio.py query "SELECT symbol, ROUND(SUM(quantity),4)
 ```
 Use **`query`** for any ad-hoc question the user asks — it is **read-only** (opens the DB
 `mode=ro` + `PRAGMA query_only`, accepts a single `SELECT`/`WITH` statement only). Translate the
-user's question into SQL over the `lots` table.
+user's question into SQL over the `lots` table. Every command opens the DB read-only and never
+creates a file: run before any `load` (or against a deleted DB) and it prints
+`No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (no traceback, no 0-byte DB).
 
 ### 4. Tax / portfolio tools (Tier-1)
 All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
