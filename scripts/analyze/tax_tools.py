@@ -13,7 +13,7 @@ gain_loss_pct.
 import datetime as dt
 import re
 
-from common import holding_term, one_year_anniversary
+from common import holding_term, one_year_anniversary, parse_date
 
 # Account is tax-advantaged (no capital-gains treatment -> excluded from harvesting/ripening) when its
 # name mentions any of these; otherwise it is a taxable account.
@@ -732,3 +732,185 @@ def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
         "est_tax": st_gain * st_rate + lt_gain * lt_rate,
         "n_lots": n_lots,
     }
+
+
+# --- Options (Tier-3) ------------------------------------------------------------------------------
+_OPT_POS_RE = re.compile(r"^([A-Za-z][A-Za-z.]*)\s+(\d+(?:\.\d+)?)\s+(call|put)$", re.IGNORECASE)
+_OPT_OCC_RE = re.compile(r"^-?([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d+(?:\.\d+)?)$")
+
+
+def parse_option(lot):
+    """Parse an option lot -> {underlying, strike, type, expiry, contracts, long, multiplier} or None.
+
+    Uses the SAME normalization as ``security_key`` (strip; positions regex on the stripped symbol,
+    OCC regex on its uppercase) so any lot ``security_key`` calls an option parses here rather than
+    being silently dropped. Positions style ``'AAL 17 Call'`` takes the expiry from the Description
+    column; the OCC/history style ``'-SOFI270115C30'`` packs it in the symbol. ``contracts`` is signed
+    (negative = written/short); ``multiplier`` is the standard 100 shares/contract."""
+    sym = (lot.get("symbol") or "").strip()
+    if security_key(sym)["kind"] != "option":
+        return None
+    try:
+        contracts = float(lot.get("quantity"))
+    except (TypeError, ValueError):
+        contracts = 0.0
+    m = _OPT_POS_RE.match(sym)
+    if m:
+        underlying, strike, otype = m.group(1).upper(), float(m.group(2)), m.group(3).lower()
+        expiry = parse_date(lot.get("description"))
+    else:
+        m = _OPT_OCC_RE.match(sym.upper())
+        if not m:
+            return None
+        underlying = m.group(1)
+        try:
+            expiry = dt.date(2000 + int(m.group(2)), int(m.group(3)), int(m.group(4)))
+        except ValueError:
+            expiry = None
+        otype = "call" if m.group(5) == "C" else "put"
+        strike = float(m.group(6))
+    return {"underlying": underlying, "strike": strike, "type": otype, "expiry": expiry,
+            "contracts": contracts, "long": contracts >= 0, "multiplier": 100}
+
+
+def underlying_spots(lots):
+    """Map underlying symbol (upper) -> current per-share price from held non-option, non-cash lots.
+
+    Uses the per-share price of the lot with the LARGEST current value for each symbol: the export's
+    per-share values can be inconsistent across a symbol's lots (partial/stale scrapes), so the biggest
+    dollar position is the most reliable single estimate. The spot is approximate and is surfaced so the
+    user can sanity-check it; it drives only option moneyness (ITM/OTM), never a dollar figure."""
+    best = {}  # symbol -> (current_value, per_share)
+    for lot in lots:
+        if is_cash(lot) or security_key(lot.get("symbol"))["kind"] == "option":
+            continue
+        sp = safe_per_share(lot)
+        if sp is None:
+            continue
+        try:
+            cv = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            continue
+        u = (lot.get("symbol") or "").strip().upper()
+        if u not in best or cv > best[u][0]:
+            best[u] = (cv, sp)
+    return {u: v[1] for u, v in best.items()}
+
+
+def _moneyness(otype, strike, spot):
+    if spot is None:
+        return "n/a"
+    if otype == "call":
+        return "ITM" if spot > strike else "OTM"
+    return "ITM" if spot < strike else "OTM"
+
+
+def options_exposure(lots, as_of, account=None):
+    """Options exposure dashboard (informational, NOT investment advice).
+
+    Returns ``(positions, by_underlying, summary)``. Each position carries premium at risk
+    (current value), notional (strike*100*abs(contracts)), moneyness (from a spot derived from a held
+    stock lot, else "n/a"), and long/short (by quantity sign). ``by_underlying`` aggregates contracts
+    by call/put and long/short, directional notionals (bullish = long call + short put; bearish = long
+    put + short call),     covered-vs-naked short calls (vs shares held IN THE SAME ACCOUNT) and short-put assignment cash.
+    Delta/theta are not computed (need live quotes). ``spots`` (moneyness) are account-independent
+    market prices; the ``account`` filter restricts positions AND same-account share coverage."""
+    acct = (account or "").lower()
+    spots = underlying_spots(lots)  # market price is account-independent -> global spot
+
+    def _match(l):
+        return not acct or acct in (l.get("account") or "").lower()
+
+    # Same-account share coverage: shares per (account, underlying); held_u = per-underlying total (view).
+    shares_au, held_u = {}, {}
+    for lot in lots:
+        if is_cash(lot) or security_key(lot.get("symbol"))["kind"] == "option" or not _match(lot):
+            continue
+        try:
+            q = float(lot.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        u = (lot.get("symbol") or "").strip().upper()
+        a = (lot.get("account") or "").lower()
+        shares_au[(a, u)] = shares_au.get((a, u), 0.0) + q
+        held_u[u] = held_u.get(u, 0.0) + q
+
+    positions = []
+    short_calls_au = {}  # (account_lower, underlying) -> short call contracts, for same-account coverage
+    for lot in lots:
+        po = parse_option(lot)
+        if po is None or not _match(lot):
+            continue
+        spot = spots.get(po["underlying"])
+        try:
+            premium = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            premium = 0.0
+        try:
+            cost = float(lot.get("cost_basis_total"))
+        except (TypeError, ValueError):
+            cost = None
+        contracts = po["contracts"]
+        notional = po["strike"] * po["multiplier"] * abs(contracts)
+        days = (po["expiry"] - as_of).days if po["expiry"] else None
+        if po["type"] == "call" and not po["long"]:
+            key = ((lot.get("account") or "").lower(), po["underlying"])
+            short_calls_au[key] = short_calls_au.get(key, 0.0) + abs(contracts)
+        positions.append({
+            "account": lot.get("account"), "underlying": po["underlying"], "type": po["type"],
+            "strike": po["strike"], "expiry": po["expiry"].isoformat() if po["expiry"] else "",
+            "days_to_expiry": days, "contracts": contracts, "long": po["long"], "premium": premium,
+            "notional": notional, "cost": cost, "moneyness": _moneyness(po["type"], po["strike"], spot),
+            "spot": spot,
+        })
+
+    agg = {}
+    for p in positions:
+        u = p["underlying"]
+        a = agg.setdefault(u, {"underlying": u, "spot": spots.get(u), "held_shares": held_u.get(u, 0.0),
+                               "long_call_contracts": 0.0, "short_call_contracts": 0.0,
+                               "long_put_contracts": 0.0, "short_put_contracts": 0.0,
+                               "premium": 0.0, "notional": 0.0, "bullish_notional": 0.0,
+                               "bearish_notional": 0.0, "put_assignment_cash": 0.0})
+        c = abs(p["contracts"])
+        if p["type"] == "call":
+            a["long_call_contracts" if p["long"] else "short_call_contracts"] += c
+        else:
+            a["long_put_contracts" if p["long"] else "short_put_contracts"] += c
+            if not p["long"]:
+                a["put_assignment_cash"] += p["notional"]
+        a["premium"] += p["premium"]
+        a["notional"] += p["notional"]
+        if (p["type"] == "call") == p["long"]:   # long call or short put -> bullish
+            a["bullish_notional"] += p["notional"]
+        else:
+            a["bearish_notional"] += p["notional"]
+    # covered/naked computed per (account, underlying) -- a short call is covered only by SAME-account shares
+    cover_u = {}
+    for (a_acct, u), sc in short_calls_au.items():
+        sh = shares_au.get((a_acct, u), 0.0)
+        cov = cover_u.setdefault(u, {"covered": 0.0, "naked": 0.0})
+        cov["covered"] += min(sc, sh / 100.0)
+        cov["naked"] += max(0.0, sc - sh / 100.0)
+    for a in agg.values():
+        cov = cover_u.get(a["underlying"], {"covered": 0.0, "naked": 0.0})
+        a["covered_contracts"], a["naked_contracts"] = cov["covered"], cov["naked"]
+        b, r = a["bullish_notional"], a["bearish_notional"]
+        a["bias"] = "bullish" if b > r else ("bearish" if r > b else "neutral")
+
+    positions.sort(key=lambda p: (-p["notional"], p["underlying"], p["strike"]))
+    by_underlying = sorted(agg.values(), key=lambda a: -a["notional"])
+    summary = {
+        "n_positions": len(positions),
+        "n_underlyings": len(by_underlying),
+        "total_premium": sum(p["premium"] for p in positions),
+        "long_premium_at_risk": sum(p["premium"] for p in positions if p["long"]),
+        "short_credit": sum(p["premium"] for p in positions if not p["long"]),
+        "total_notional": sum(p["notional"] for p in positions),
+        "bullish_notional": sum(a["bullish_notional"] for a in by_underlying),
+        "bearish_notional": sum(a["bearish_notional"] for a in by_underlying),
+        "total_put_assignment_cash": sum(a["put_assignment_cash"] for a in by_underlying),
+        "has_short": any(not p["long"] for p in positions),
+        "has_naked_calls": any(a["naked_contracts"] > 1e-9 for a in by_underlying),
+    }
+    return positions, by_underlying, summary

@@ -73,6 +73,7 @@ python scripts/analyze/portfolio.py washsale path/to/Accounts_History.csv --same
 python scripts/analyze/portfolio.py capacity --income 40000 --ceiling 50000   # 0% LTCG gain-harvest headroom
 python scripts/analyze/portfolio.py gift --min-gain-pct 20          # appreciated long-term lots best to donate
 python scripts/analyze/portfolio.py dashboard --within 60          # year-end tax snapshot (all tools consolidated)
+python scripts/analyze/portfolio.py options --top 15               # options exposure by underlying (premium, notional, moneyness)
 ```
 - **`harvest`** — taxable accounts only; excludes tax-advantaged (IRA/Roth/HSA/BrokerageLink/529) and
   cash; ranks short-term losses first (they offset ordinary income).
@@ -105,6 +106,12 @@ python scripts/analyze/portfolio.py dashboard --within 60          # year-end ta
   gain/loss by account (taxable vs tax-advantaged), harvestable losses, lots ripening within
   `--within` days, the estimated tax if all taxable lots were sold now, and — with `--income`/`--ceiling`
   — the 0% LTCG realization capacity. Estimates only, **not tax advice**.
+- **`options`** — options exposure dashboard. Parses each option lot (`AAL 17 Call` + the expiry from
+  the Description column) into underlying/strike/type/expiry; reports premium at risk (current value),
+  notional (strike×100×contracts), long/short (by quantity sign), per-underlying directional bias, and
+  covered-vs-naked / cash-secured-put assignment cash for any short options. Moneyness (ITM/OTM) uses a
+  spot from your largest held stock lot per underlying (approximate; "n/a" when not held). Delta/theta
+  need live quotes and are not computed. **Not investment advice.**
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed

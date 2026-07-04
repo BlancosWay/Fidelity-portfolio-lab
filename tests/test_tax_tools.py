@@ -629,5 +629,118 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(le["n_lots"], 2)
 
 
+def opt_lot(symbol, expiry_desc, contracts, current_value=1000.0, cost=800.0,
+            account="Individual - TOD Test"):
+    """Synthetic OPTION lot: symbol='AAL 17 Call', description=expiry, quantity=contracts (signed)."""
+    q = float(contracts)
+    return lot(account=account, symbol=symbol, quantity=q, current_value=current_value,
+               gain_loss=(current_value - cost) if current_value is not None else 0.0,
+               date_acquired="2026-03-01", term="Short-Term", cost_basis_total=cost,
+               avg_cost_basis=(cost / abs(q)) if q else 0.0, gain_loss_pct=0.0,
+               description=expiry_desc, margin_cash="Margin")
+
+
+def stock_lot(symbol, qty, value, account="Individual - TOD Test"):
+    """Synthetic STOCK lot used as a spot source (current price = value/qty)."""
+    return lot(account=account, symbol=symbol, quantity=float(qty), current_value=float(value),
+               gain_loss=0.0, date_acquired="2024-01-01", term="Long-Term",
+               cost_basis_total=float(value), avg_cost_basis=value / qty, gain_loss_pct=0.0)
+
+
+class OptionsTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_parse_option_positions_style(self):
+        po = tt.parse_option(opt_lot("AAL 17 Call", "Jul-17-2026", 5))
+        self.assertEqual(po["underlying"], "AAL")
+        self.assertEqual(po["strike"], 17.0)
+        self.assertEqual(po["type"], "call")
+        self.assertEqual(po["expiry"], dt.date(2026, 7, 17))
+        self.assertEqual(po["contracts"], 5.0)
+        self.assertTrue(po["long"])
+        self.assertEqual(po["multiplier"], 100)
+
+    def test_parse_option_put_single_letter_short(self):
+        self.assertEqual(tt.parse_option(opt_lot("AMZN 175 Put", "Aug-21-2026", 10))["type"], "put")
+        self.assertEqual(tt.parse_option(opt_lot("S 20 Call", "Jul-17-2026", 1))["underlying"], "S")
+        self.assertFalse(tt.parse_option(opt_lot("AAL 17 Call", "Jul-17-2026", -2))["long"])
+
+    def test_parse_option_non_option_returns_none(self):
+        self.assertIsNone(tt.parse_option(stock_lot("AAPL", 10, 1000)))
+
+    def test_parse_option_occ_and_parity(self):
+        po = tt.parse_option(opt_lot("-SOFI270115C30", "", 1))
+        self.assertEqual(po["underlying"], "SOFI")
+        self.assertEqual(po["type"], "call")          # C -> call
+        self.assertEqual(po["strike"], 30.0)
+        self.assertEqual(po["expiry"], dt.date(2027, 1, 15))
+        # parity: every symbol security_key calls an option MUST parse (not None), incl leading-space/lowercase
+        for sym in ("AAL 17 Call", "-SOFI270115C30", " -sofi270115c30", "AMZN 175 Put", "S 20 Call"):
+            if tt.security_key(sym)["kind"] == "option":
+                self.assertIsNotNone(tt.parse_option(opt_lot(sym, "Jul-17-2026", 1)), sym)
+
+    def test_underlying_spots(self):
+        lots = [stock_lot("AAL", 100, 1300), opt_lot("AAL 17 Call", "Jul-17-2026", 5)]
+        spots = tt.underlying_spots(lots)
+        self.assertAlmostEqual(spots["AAL"], 13.0)
+        self.assertNotIn("AAL 17 CALL", spots)        # option is not a spot source
+
+    def test_underlying_spots_uses_largest_value_lot(self):
+        # per-share inconsistent across lots (export quirk) -> the largest-current-value lot wins
+        lots = [stock_lot("AAL", 1, 74.0), stock_lot("AAL", 100, 1300.0)]   # $74/sh (val 74) vs $13/sh (val 1300)
+        self.assertAlmostEqual(tt.underlying_spots(lots)["AAL"], 13.0)
+
+    def test_moneyness_and_exposure(self):
+        lots = [
+            stock_lot("AAL", 100, 1300),                                       # spot 13
+            opt_lot("AAL 17 Call", "Jul-17-2026", 5, current_value=1000, cost=800),  # OTM (13<17)
+            opt_lot("AAL 10 Call", "Jul-17-2026", 2, current_value=600, cost=500),   # ITM (13>10)
+        ]
+        positions, by_u, s = tt.options_exposure(lots, self.AS_OF)
+        m = {(p["underlying"], p["strike"]): p for p in positions}
+        self.assertEqual(m[("AAL", 17.0)]["moneyness"], "OTM")
+        self.assertEqual(m[("AAL", 10.0)]["moneyness"], "ITM")
+        self.assertAlmostEqual(m[("AAL", 17.0)]["notional"], 17 * 100 * 5)
+        self.assertAlmostEqual(m[("AAL", 17.0)]["premium"], 1000)
+        self.assertFalse(s["has_short"])
+        self.assertAlmostEqual(s["long_premium_at_risk"], 1600)
+        self.assertAlmostEqual(s["bullish_notional"], 17 * 100 * 5 + 10 * 100 * 2)   # both long calls
+
+    def test_put_bearish_and_no_spot(self):
+        positions, by_u, s = tt.options_exposure(
+            [opt_lot("USO 80 Put", "Aug-21-2026", 1, current_value=280, cost=250)], self.AS_OF)
+        self.assertEqual(positions[0]["moneyness"], "n/a")      # no USO stock held
+        self.assertAlmostEqual(s["bearish_notional"], 80 * 100 * 1)
+        self.assertAlmostEqual(s["bullish_notional"], 0.0)
+
+    def test_short_naked_call_and_assignment_cash(self):
+        positions, by_u, s = tt.options_exposure([
+            opt_lot("AAL 17 Call", "Jul-17-2026", -1, current_value=100, cost=0),   # written call, 0 shares held
+            opt_lot("AAL 15 Put", "Jul-17-2026", -2, current_value=200, cost=0),    # written put
+        ], self.AS_OF)
+        self.assertTrue(s["has_short"])
+        self.assertTrue(s["has_naked_calls"])
+        self.assertAlmostEqual(s["total_put_assignment_cash"], 15 * 100 * 2)
+
+    def test_covered_call_same_account(self):
+        positions, by_u, s = tt.options_exposure([
+            stock_lot("XYZ", 100, 5000),                                          # 100 shares, same account
+            opt_lot("XYZ 50 Call", "Jul-17-2026", -1, current_value=100, cost=0),  # short 1 call, same account
+        ], self.AS_OF)
+        self.assertFalse(s["has_naked_calls"])                                    # 100 shares cover 1 short call
+        xyz = next(a for a in by_u if a["underlying"] == "XYZ")
+        self.assertAlmostEqual(xyz["covered_contracts"], 1.0)
+
+    def test_coverage_is_same_account(self):
+        # shares in Account A do NOT cover a short call written in Account B (even unfiltered)
+        lots = [
+            stock_lot("XYZ", 100, 5000, account="Account A Test"),
+            opt_lot("XYZ 50 Call", "Jul-17-2026", -1, current_value=100, cost=0, account="Account B Test"),
+        ]
+        self.assertTrue(tt.options_exposure(lots, self.AS_OF)[2]["has_naked_calls"])
+        self.assertTrue(tt.options_exposure(lots, self.AS_OF, account="Account B")[2]["has_naked_calls"])
+        self.assertEqual(tt.options_exposure(lots, self.AS_OF, account="Account A")[2]["n_positions"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

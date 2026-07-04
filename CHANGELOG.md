@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Tier-3 options tools** — new read-only `portfolio.py` subcommands (stdlib only; informational, not
+  investment advice):
+  - `options` — options exposure dashboard. Parses each option lot (`AAL 17 Call` + expiry from the
+    Description column) into underlying/strike/type/expiry; reports premium at risk (current value),
+    notional (strike×100×contracts), long/short by quantity sign, per-underlying directional bias, and
+    covered-vs-naked / cash-secured-put assignment cash for short options. Moneyness (ITM/OTM) uses a
+    spot from the largest held stock lot per underlying (approximate; "n/a" when not held).
+    Delta/theta are not computed (need live quotes).
 - **Tier-2 tax tools** — new read-only `portfolio.py` subcommands (stdlib only; estimates, not tax advice):
   - `capacity` — bracket-aware realized-gain capacity planner. Selects taxable long-term gain lots
     (biggest gain first, final lot partial) to fill a `--target-gain` or the headroom
