@@ -130,6 +130,25 @@ class SellCliTests(unittest.TestCase):
         self.assertIn("vs FIFO", text)
         self.assertIn("not tax advice", text)
 
+    def test_excludes_tax_advantaged_and_flags_multi_account(self):
+        db = build_db([
+            _row("Individual - TOD Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+            _row("Joint Brokerage Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+            _row("Roth IRA Test", "SHR", 10, "Jan-05-2024", "$8.00", "$80.00", "$100.00", "+$20.00", "+25.00%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "SHR", 20, None, "fifo", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertNotIn("Roth IRA Test", text)                 # tax-advantaged lot excluded
+        self.assertIn("per-account", text)                      # multi-account NOTE
+        self.assertIn("not tax advice", text)
+
+    def test_sell_help_does_not_crash(self):
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+            portfolio.main(["sell", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+
 
 HIST_HEADER = ("Run Date,Account,Account Number,Action,Symbol,Description,Type,Exchange Quantity,"
                "Exchange Currency,Currency,Price,Quantity,Exchange Rate,Commission,Fees,"

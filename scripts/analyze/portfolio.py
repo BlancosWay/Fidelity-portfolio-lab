@@ -295,7 +295,8 @@ def cmd_concentration(db_path, top, threshold):
 def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
     picks, s = tax_tools.select_lots(fetch_lots(db_path), symbol, shares, strategy, account, as_of, st_rate, lt_rate)
     if not picks:
-        print(f"No sellable lots found for {s['symbol']}" + (f" in accounts matching '{account}'." if account else "."))
+        print(f"No sellable taxable lots found for {s['symbol']}"
+              + (f" in accounts matching '{account}'." if account else " (tax-advantaged lots are excluded)."))
         return
     _print_table(
         ["Account", "Acquired", "Term", "Qty", "Basis", "Est Proceeds", "Realized G/L"],
@@ -304,8 +305,11 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
     )
     print(f"\n{s['strategy']} sale of {s['filled_shares']:g}/{s['requested_shares']:g} sh {s['symbol']} (as of {as_of}):")
     if s["insufficient"]:
-        print(f"  WARNING: only {s['available_shares']:g} shares available; short by "
+        print(f"  WARNING: only {s['available_shares']:g} taxable shares available; short by "
               f"{s['requested_shares'] - s['filled_shares']:g}.")
+    if s["multi_account"]:
+        print("  NOTE: picks span multiple accounts; specific-ID sales are per-account -- "
+              "place one order per account.")
     print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
     print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
     print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")

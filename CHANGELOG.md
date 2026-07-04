@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- **`sell` no longer operates on tax-advantaged accounts.** Lot selection (`hifo`/`fifo`/`loss-first`/
+  `min-tax`) now excludes IRA/Roth/HSA/BrokerageLink/529 lots — their gains are tax-free, so the tool
+  never recommends selling a retirement lot or charges phantom capital-gains tax on one. A pick that
+  spans multiple accounts prints a per-account NOTE (specific-ID sales are one order per account).
+
 ### Added
 - **Tier-3 options tools** — new read-only `portfolio.py` subcommands (stdlib only; informational, not
   investment advice):
