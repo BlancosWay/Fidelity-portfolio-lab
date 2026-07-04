@@ -852,6 +852,18 @@ class OptionsTests(unittest.TestCase):
         self.assertTrue(s["has_naked_calls"])
         self.assertAlmostEqual(s["total_put_assignment_cash"], 15 * 100 * 2)
 
+    def test_expired_excluded_from_exposure(self):
+        lots = [
+            stock_lot("AAL", 100, 1300),
+            opt_lot("AAL 10 Call", "Jul-17-2026", 2, current_value=600),   # live
+            opt_lot("XYZ 100 Call", "Jan-16-2026", 3, current_value=300),  # expired before AS_OF
+        ]
+        positions, by_u, s = tt.options_exposure(lots, self.AS_OF)
+        self.assertEqual(s["n_positions"], 1)                 # only the live option
+        self.assertEqual(s["n_expired_excluded"], 1)
+        self.assertNotIn("XYZ", [p["underlying"] for p in positions])
+        self.assertAlmostEqual(s["bullish_notional"], 10 * 100 * 2)   # expired 100-strike call not counted
+
     def test_covered_call_same_account(self):
         positions, by_u, s = tt.options_exposure([
             stock_lot("XYZ", 100, 5000),                                          # 100 shares, same account
@@ -917,6 +929,27 @@ class ExpirationTests(unittest.TestCase):
             [opt_lot("AAL 17 Call", "Jul-17-2026", 1, current_value=None)], self.AS_OF)
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(rows[0]["premium"], 0.0)
+
+    def test_expired_excluded_from_live_metrics(self):
+        lots = [
+            opt_lot("AAL 10 Call", "Jul-17-2026", 1, current_value=300),   # live, 16 days
+            opt_lot("AAL 17 Call", "Jun-01-2026", 1, current_value=50),    # expired (-30 days)
+        ]
+        rows, s = tt.expiration_calendar(lots, self.AS_OF, within=30)
+        self.assertEqual(len(rows), 2)                       # both still LISTED
+        self.assertEqual(s["expired"], 1)
+        self.assertEqual(s["n_expiring_soon"], 1)            # only the live one is "soon"
+        self.assertEqual(s["nearest_expiry"], "2026-07-17")  # nearest NON-expired
+        self.assertAlmostEqual(s["total_premium_at_risk"], 300)   # expired premium excluded
+
+    def test_expired_short_put_assignment_cash_excluded(self):
+        lots = [
+            opt_lot("AAL 15 Put", "Jul-17-2026", -2, current_value=200),   # live short put
+            opt_lot("AAL 15 Put", "Jun-01-2026", -3, current_value=300),   # expired short put
+        ]
+        _, s = tt.expiration_calendar(lots, self.AS_OF)
+        self.assertAlmostEqual(s["total_assignment_cash"], 15 * 100 * 2)       # live only
+        self.assertAlmostEqual(s["expired_assignment_cash"], 15 * 100 * 3)     # tracked separately
 
 
 class Tier1ReproTests(unittest.TestCase):

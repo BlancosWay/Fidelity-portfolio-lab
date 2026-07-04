@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- **`options`/`expiration` no longer count already-expired contracts as live.** Options whose expiry
+  is before the as-of date are excluded from `options` exposure (premium/notional/bias/coverage; the
+  count of excluded lots is noted), and from `expiration`'s live/soon/assignment metrics and
+  `nearest`-expiry (expired rows are still listed with a separate `expired` count so nothing is hidden).
 - **`harvest` benefit and `dashboard` "If sold now" now model capital-loss netting + the $3,000 cap.**
   Previously each tax figure applied the ST/LT rate to that bucket's signed total independently, so a
   net capital loss could print a large negative "tax" (a fake refund) and the harvest benefit ignored

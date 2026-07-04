@@ -61,7 +61,7 @@ Real data:
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
 | `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
-| `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked. |
+| `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked (expired excluded). |
 | `expiration [--within N] [--account A] [--as-of D] [--top N]` | Option expiration & assignment calendar: days-to-expiry, premium at risk by expiry, moneyness, short-put assignment cash. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),

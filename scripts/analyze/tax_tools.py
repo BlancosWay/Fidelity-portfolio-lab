@@ -897,9 +897,13 @@ def options_exposure(lots, as_of, account=None):
 
     positions = []
     short_calls_au = {}  # (account_lower, underlying) -> short call contracts, for same-account coverage
+    n_expired_excluded = 0
     for lot in lots:
         po = parse_option(lot)
         if po is None or not _match(lot):
+            continue
+        if po["expiry"] is not None and po["expiry"] < as_of:
+            n_expired_excluded += 1        # an expired contract is not live exposure
             continue
         spot = spots.get(po["underlying"])
         try:
@@ -972,6 +976,7 @@ def options_exposure(lots, as_of, account=None):
         "total_put_assignment_cash": sum(a["put_assignment_cash"] for a in by_underlying),
         "has_short": any(not p["long"] for p in positions),
         "has_naked_calls": any(a["naked_contracts"] > 1e-9 for a in by_underlying),
+        "n_expired_excluded": n_expired_excluded,
     }
     return positions, by_underlying, summary
 
@@ -1012,15 +1017,17 @@ def expiration_calendar(lots, as_of, within=None, account=None):
         })
     rows.sort(key=lambda r: (r["expiry"], r["underlying"], r["strike"]))
     win = within if within is not None else 30
+    live = [r for r in rows if r["days"] >= 0]     # not-yet-expired rows drive the live/soon metrics
     summary = {
         "n": len(rows),
-        "nearest_expiry": rows[0]["expiry"] if rows else None,
-        "nearest_days": rows[0]["days"] if rows else None,
-        "total_premium_at_risk": sum(r["premium_at_risk"] for r in rows),
-        "total_assignment_cash": sum(r["assignment_cash"] for r in rows),
-        "n_itm": sum(1 for r in rows if r["moneyness"] == "ITM"),
-        "n_expiring_soon": sum(1 for r in rows if r["days"] <= win),
-        "soon_premium_at_risk": sum(r["premium_at_risk"] for r in rows if r["days"] <= win),
+        "nearest_expiry": live[0]["expiry"] if live else None,
+        "nearest_days": live[0]["days"] if live else None,
+        "total_premium_at_risk": sum(r["premium_at_risk"] for r in live),
+        "total_assignment_cash": sum(r["assignment_cash"] for r in live),
+        "expired_assignment_cash": sum(r["assignment_cash"] for r in rows if r["days"] < 0),
+        "n_itm": sum(1 for r in live if r["moneyness"] == "ITM"),
+        "n_expiring_soon": sum(1 for r in live if r["days"] <= win),
+        "soon_premium_at_risk": sum(r["premium_at_risk"] for r in live if r["days"] <= win),
         "window": within,
         "expired": sum(1 for r in rows if r["days"] < 0),
     }

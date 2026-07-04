@@ -117,10 +117,13 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   notional (strike×100×contracts), long/short (by quantity sign), per-underlying directional bias, and
   covered-vs-naked / cash-secured-put assignment cash for any short options. Moneyness (ITM/OTM) uses a
   spot from your largest held stock lot per underlying (approximate; "n/a" when not held). Delta/theta
-  need live quotes and are not computed. **Not investment advice.**
+  need live quotes and are not computed. Already-expired contracts are excluded from exposure. **Not
+  investment advice.**
 - **`expiration`** — option expiration & assignment calendar: one row per dated option lot sorted by
   expiry, with days-to-expiry, premium at risk (long current value), moneyness, and short-put
-  assignment cash. `--within N` limits to options expiring within N days. **Not investment advice.**
+  assignment cash. `--within N` limits to options expiring within N days. Already-expired contracts are
+  still listed (with a separate count) but excluded from the live/soon/assignment totals. **Not
+  investment advice.**
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed

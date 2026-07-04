@@ -349,6 +349,22 @@ class OptionsCliTests(unittest.TestCase):
             portfolio.main(["options", "--help"])
         self.assertEqual(cm.exception.code, 0)
 
+    def test_expired_excluded_note(self):
+        db = build_db([
+            _row("Individual - TOD Test", "AAL", 100, "Jan-05-2024",
+                 "$13.00", "$1,300.00", "$1,300.00", "$0.00", "0.00%"),
+            _row("Individual - TOD Test", "AAL 10 Call", 2, "Mar-01-2026",
+                 "$3.00", "$500.00", "$600.00", "+$100.00", "+20.00%", desc="Jul-17-2026"),   # live
+            _row("Individual - TOD Test", "XYZ 100 Call", 3, "Mar-01-2025",
+                 "$1.00", "$300.00", "$300.00", "$0.00", "0.00%", desc="Jan-16-2026"),         # expired
+        ])
+        try:
+            text = run(portfolio.cmd_options, db, AS_OF, None, 20)
+        finally:
+            os.unlink(db)
+        self.assertIn("expired option lot(s) excluded", text)
+        self.assertNotIn("XYZ", text)
+
 
 class ExpirationCliTests(unittest.TestCase):
     ROWS = [

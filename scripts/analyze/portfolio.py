@@ -464,7 +464,10 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
 def cmd_options(db_path, as_of, account, top):
     positions, by_u, s = tax_tools.options_exposure(fetch_lots(db_path), as_of, account)
     if not positions:
-        print("No option positions found.")
+        msg = "No live option positions found."
+        if s.get("n_expired_excluded"):
+            msg += f" ({s['n_expired_excluded']} expired option lot(s) excluded.)"
+        print(msg)
         return
     print("== Exposure by underlying ==")
     _print_table(
@@ -486,6 +489,8 @@ def cmd_options(db_path, as_of, account, top):
          for p in positions[:top]],
     )
     print(f"\nOption positions (as of {as_of}): {s['n_positions']} across {s['n_underlyings']} underlyings.")
+    if s.get("n_expired_excluded"):
+        print(f"  ({s['n_expired_excluded']} expired option lot(s) excluded from exposure.)")
     print(f"  Premium at risk (long): ${s['long_premium_at_risk']:,.2f}; notional exposure: "
           f"${s['total_notional']:,.2f} (bullish ${s['bullish_notional']:,.2f} / bearish ${s['bearish_notional']:,.2f}).")
     if s["has_short"]:
