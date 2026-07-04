@@ -742,5 +742,52 @@ class OptionsTests(unittest.TestCase):
         self.assertEqual(tt.options_exposure(lots, self.AS_OF, account="Account A")[2]["n_positions"], 0)
 
 
+class ExpirationTests(unittest.TestCase):
+    AS_OF = dt.date(2026, 7, 1)
+
+    def test_sorted_and_nearest(self):
+        lots = [
+            opt_lot("AAL 17 Call", "Aug-21-2026", 5, current_value=1000),
+            opt_lot("AMZN 175 Put", "Jul-17-2026", 10, current_value=2000),
+        ]
+        rows, s = tt.expiration_calendar(lots, self.AS_OF)
+        self.assertEqual([r["underlying"] for r in rows], ["AMZN", "AAL"])   # Jul before Aug
+        self.assertEqual(s["nearest_expiry"], "2026-07-17")
+        self.assertEqual(s["nearest_days"], (dt.date(2026, 7, 17) - self.AS_OF).days)
+        self.assertAlmostEqual(s["total_premium_at_risk"], 3000)
+
+    def test_within_filter(self):
+        lots = [
+            opt_lot("AAL 17 Call", "Jul-10-2026", 1, current_value=100),   # 9 days
+            opt_lot("AAL 15 Call", "Dec-18-2026", 1, current_value=100),   # far
+        ]
+        rows, s = tt.expiration_calendar(lots, self.AS_OF, within=30)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["expiry"], "2026-07-10")
+
+    def test_short_put_assignment_cash(self):
+        rows, s = tt.expiration_calendar(
+            [opt_lot("AAL 15 Put", "Jul-17-2026", -2, current_value=200)], self.AS_OF)
+        self.assertAlmostEqual(s["total_assignment_cash"], 15 * 100 * 2)
+        self.assertAlmostEqual(s["total_premium_at_risk"], 0.0)            # short -> no long premium at risk
+
+    def test_itm_and_expired(self):
+        lots = [
+            stock_lot("AAL", 100, 1300),                                   # spot 13
+            opt_lot("AAL 10 Call", "Jul-17-2026", 1, current_value=300),   # ITM (13>10)
+            opt_lot("AAL 17 Call", "Jun-01-2026", 1, current_value=50),    # already expired (< as_of)
+        ]
+        rows, s = tt.expiration_calendar(lots, self.AS_OF)
+        self.assertGreaterEqual(s["n_itm"], 1)
+        self.assertGreaterEqual(s["expired"], 1)
+        self.assertLess(next(r for r in rows if r["expiry"] == "2026-06-01")["days"], 0)
+
+    def test_missing_current_value_no_raise(self):
+        rows, s = tt.expiration_calendar(
+            [opt_lot("AAL 17 Call", "Jul-17-2026", 1, current_value=None)], self.AS_OF)
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["premium"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

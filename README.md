@@ -62,6 +62,7 @@ Real data:
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
 | `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
 | `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked. |
+| `expiration [--within N] [--account A] [--as-of D] [--top N]` | Option expiration & assignment calendar: days-to-expiry, premium at risk by expiry, moneyness, short-put assignment cash. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
@@ -103,6 +104,11 @@ Real data:
 > uses a spot derived from your largest held stock lot for that underlying (approximate — verify against
 > your broker), and is "n/a" when the underlying isn't held as stock. Delta/theta/IV are **not** computed
 > (they need live quotes; this tool is offline). Informational — **not investment advice**.
+>
+> `expiration` is the option **expiration & assignment calendar**: one row per dated option lot sorted by
+> expiry, with days-to-expiry, premium at risk (long current value), moneyness, and — for any *short*
+> puts — the assignment cash if assigned. `--within N` limits to options expiring within N days.
+> Informational — **not investment advice**.
 
 ## Definitions
 **long** = held **> 1 year**; **short** = held **<= 1 year** (exactly one year counts as short),

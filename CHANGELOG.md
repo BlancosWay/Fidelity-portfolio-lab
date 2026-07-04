@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     covered-vs-naked / cash-secured-put assignment cash for short options. Moneyness (ITM/OTM) uses a
     spot from the largest held stock lot per underlying (approximate; "n/a" when not held).
     Delta/theta are not computed (need live quotes).
+  - `expiration` — option expiration & assignment calendar: one row per dated option lot sorted by
+    expiry, with days-to-expiry, premium at risk (long), moneyness, and short-put assignment cash;
+    `--within N` limits to options expiring within N days.
 - **Tier-2 tax tools** — new read-only `portfolio.py` subcommands (stdlib only; estimates, not tax advice):
   - `capacity` — bracket-aware realized-gain capacity planner. Selects taxable long-term gain lots
     (biggest gain first, final lot partial) to fill a `--target-gain` or the headroom

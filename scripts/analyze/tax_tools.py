@@ -914,3 +914,54 @@ def options_exposure(lots, as_of, account=None):
         "has_naked_calls": any(a["naked_contracts"] > 1e-9 for a in by_underlying),
     }
     return positions, by_underlying, summary
+
+
+def expiration_calendar(lots, as_of, within=None, account=None):
+    """Option expiration & assignment calendar (informational, NOT investment advice).
+
+    Rows (one per dated option lot, sorted by expiry) carry days-to-expiry, premium at risk (long
+    current value), short-put assignment cash (strike*100*abs(contracts)), and moneyness (from a spot
+    derived from a held stock lot, else "n/a"). ``within`` keeps only options expiring within N days.
+    Reuses ``parse_option``/``underlying_spots`` from the options node."""
+    acct = (account or "").lower()
+    spots = underlying_spots(lots)
+    rows = []
+    for lot in lots:
+        po = parse_option(lot)
+        if po is None or po["expiry"] is None:
+            continue
+        if acct and acct not in (lot.get("account") or "").lower():
+            continue
+        days = (po["expiry"] - as_of).days
+        if within is not None and days > within:
+            continue
+        try:
+            premium = float(lot.get("current_value"))
+        except (TypeError, ValueError):
+            premium = 0.0
+        contracts = po["contracts"]
+        notional = po["strike"] * po["multiplier"] * abs(contracts)
+        is_short_put = po["type"] == "put" and not po["long"]
+        rows.append({
+            "expiry": po["expiry"].isoformat(), "days": days, "account": lot.get("account"),
+            "underlying": po["underlying"], "type": po["type"], "strike": po["strike"],
+            "contracts": contracts, "long": po["long"], "premium": premium,
+            "premium_at_risk": premium if po["long"] else 0.0,
+            "assignment_cash": notional if is_short_put else 0.0,
+            "moneyness": _moneyness(po["type"], po["strike"], spots.get(po["underlying"])),
+        })
+    rows.sort(key=lambda r: (r["expiry"], r["underlying"], r["strike"]))
+    win = within if within is not None else 30
+    summary = {
+        "n": len(rows),
+        "nearest_expiry": rows[0]["expiry"] if rows else None,
+        "nearest_days": rows[0]["days"] if rows else None,
+        "total_premium_at_risk": sum(r["premium_at_risk"] for r in rows),
+        "total_assignment_cash": sum(r["assignment_cash"] for r in rows),
+        "n_itm": sum(1 for r in rows if r["moneyness"] == "ITM"),
+        "n_expiring_soon": sum(1 for r in rows if r["days"] <= win),
+        "soon_premium_at_risk": sum(r["premium_at_risk"] for r in rows if r["days"] <= win),
+        "window": within,
+        "expired": sum(1 for r in rows if r["days"] < 0),
+    }
+    return rows, summary
