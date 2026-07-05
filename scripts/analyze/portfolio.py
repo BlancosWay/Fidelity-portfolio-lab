@@ -122,10 +122,20 @@ def load(csv_path, db_path=DEFAULT_DB, as_of=None):
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
-        if headers != EXPECTED_HEADERS:
+        # Tolerate benign header drift: values are mapped by NAME (below), so extra or reordered columns
+        # are fine; only a MISSING required column is fatal.
+        missing = [h for h in EXPECTED_HEADERS if h not in headers]
+        if missing:
             raise ValueError(
-                "CSV headers do not match the expected export schema.\n"
-                f"  expected: {EXPECTED_HEADERS}\n  got:      {headers}")
+                "CSV is missing required export columns.\n"
+                f"  required: {EXPECTED_HEADERS}\n  missing:  {missing}\n  got:      {headers}")
+        # A duplicated required column is ambiguous (csv.DictReader keeps only the last), so reject it
+        # rather than silently mapping the wrong column.
+        dupes = [h for h in EXPECTED_HEADERS if headers.count(h) > 1]
+        if dupes:
+            raise ValueError(
+                "CSV has duplicate required columns (ambiguous mapping).\n"
+                f"  duplicated: {dupes}\n  got:        {headers}")
         rows = list(reader)
 
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -159,17 +169,55 @@ def load(csv_path, db_path=DEFAULT_DB, as_of=None):
 
 
 # --------------------------------------------------------------------------- read-only query
+def _strip_literals_and_comments(stmt):
+    """Blank out SQL string literals, ``--`` line comments and ``/* */`` block comments via a single
+    left-to-right scan, so the structural safety checks (single-statement, no DDL keywords) can't be
+    fooled by a keyword/``;`` hidden inside a literal OR a comment (and a ``--`` inside a real literal is
+    not mistaken for a comment). Returns the statement with each such span replaced by a space."""
+    out = []
+    i, n = 0, len(stmt)
+    while i < n:
+        c = stmt[i]
+        if c == "'":                                        # string literal ('' escapes a quote)
+            i += 1
+            while i < n:
+                if stmt[i] == "'":
+                    if i + 1 < n and stmt[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            out.append(" ")
+        elif c == "-" and i + 1 < n and stmt[i + 1] == "-":  # -- line comment
+            i += 2
+            while i < n and stmt[i] != "\n":
+                i += 1
+            out.append(" ")
+        elif c == "/" and i + 1 < n and stmt[i + 1] == "*":  # /* block comment */
+            i += 2
+            while i + 1 < n and not (stmt[i] == "*" and stmt[i + 1] == "/"):
+                i += 1
+            i += 2
+            out.append(" ")
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def _validate_query(sql):
     stmt = (sql or "").strip()
     if stmt.endswith(";"):
         stmt = stmt[:-1].strip()
     if not stmt:
         raise ValueError("empty query")
-    if ";" in stmt:
-        raise ValueError("only a single statement is allowed")
-    low = stmt.lower()
-    if not (low.startswith("select") or low.startswith("with")):
+    if not stmt.lower().startswith(("select", "with")):
         raise ValueError("only read-only SELECT/WITH queries are allowed")
+    scan = _strip_literals_and_comments(stmt)   # structural checks ignore literal/comment contents
+    if ";" in scan:
+        raise ValueError("only a single statement is allowed")
+    low = scan.lower()
     for kw in ("attach", "detach", "pragma", "insert", "update", "delete", "drop",
                "alter", "create", "replace", "reindex", "vacuum", "begin", "commit"):
         if re.search(rf"\b{kw}\b", low):
@@ -277,11 +325,13 @@ def _as_of(val):
     return dt.date.fromisoformat(val) if val else dt.date.today()
 
 
-def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
+def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0,
+                max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
-    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains)
+    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains,
+                                max_ordinary_offset)
     if not rows:
         print("No harvestable losses in taxable accounts.")
         return
@@ -294,8 +344,8 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offse
     print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
     print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
     print(f"  Estimated current-year tax benefit: ~${s['est_benefit']:,.2f}  [estimate, not tax advice]")
-    print("  (harvested losses first offset realized gains of the same character, then up to $3,000 "
-          "of ordinary income per year; the rest carries forward)")
+    print(f"  (harvested losses first offset realized gains of the same character, then up to "
+          f"${max_ordinary_offset:,.0f} of ordinary income per year; the rest carries forward)")
     if s["carryforward_loss"] > 0:
         print(f"  Loss carried forward to future years: ${s['carryforward_loss']:,.2f}")
     flags = tax_tools.price_dispersion_flags(lots)
@@ -358,11 +408,13 @@ def cmd_concentration(db_path, top, threshold):
     _exclusion_notes()
 
 
-def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
+def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate,
+             max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
-    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate,
+                                     max_ordinary_offset)
     if not picks:
         print(f"No sellable taxable lots found for {s['symbol']}"
               + (f" in accounts matching '{account}'." if account else " (tax-advantaged lots are excluded)."))
@@ -385,7 +437,13 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
               f"(${disp['min']:,.2f}..${disp['max']:,.2f}); the export may be corrupted -- verify before acting.")
     print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
     print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
-    print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
+    if s["net_loss"] > 0:
+        print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST/LT netted): ~${s['est_tax']:,.2f}  "
+              f"(net capital LOSS ${s['net_loss']:,.2f}: ${s['deductible_loss']:,.2f} offsets ordinary income now, "
+              f"${s['carryforward']:,.2f} carries forward)  [estimate, not tax advice]")
+    else:
+        print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST/LT netted): ~${s['est_tax']:,.2f}  "
+              f"[estimate, not tax advice]")
 
 
 def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
@@ -397,9 +455,11 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     c, s = res["candidates"], res["summary"]
     if c:
         _print_table(
-            ["Account", "Symbol", "Loss $", "Status", "Triggering purchases (any account)"],
-            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "", r["status"],
-              "; ".join(f"{t['action']} {t['qty']:g} in {t['account']} {t['date']}" for t in r["triggers"]) or "-")
+            ["Account", "Symbol", "Loss $", "Disallowed $ (est)", "Status", "Triggering purchases (any account)"],
+            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "",
+              round(r["disallowed_loss"], 2) if r["status"] != "CLEAN" else "", r["status"],
+              "; ".join(f"{t['action']}{'*' if t.get('inferred') else ''} {t['qty']:g} in {t['account']} {t['date']}"
+                        for t in r["triggers"]) or "-")
              for r in c],
         )
     else:
@@ -409,6 +469,12 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     print(f"  CAUTION (replacement buy in a taxable account): {s['caution']}")
     print(f"  REVIEW  (replacement buy in a 401(k)/403(b)/BrokerageLink/529 -> wash-sale treatment unsettled; prevailing view is it does NOT apply, confirm with a tax pro): {s['review']}")
     print(f"  CLEAN: {s['clean']}")
+    print("  Disallowed $ (est) apportions the loss to the shares matched by replacement purchases "
+          "(only the matched shares' loss is disallowed; the rest stays allowed). Each row is an "
+          "INDEPENDENT per-lot what-if -- a shared replacement can wash a given share only once, so the "
+          "Disallowed column is not additive across rows.")
+    print("  * = INFERRED acquisition (option assignment/exercise or an inbound transfer/exchange); its"
+          " status is capped at REVIEW -- verify whether it re-acquired a substantially identical position.")
     print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")
     if res["realized"]:
         print(f"\n  Realized-history review -- {len(res['realized'])} past sale(s) had a same-security "
@@ -490,7 +556,7 @@ def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
     print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")
 
 
-def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
+def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling, max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
@@ -510,7 +576,7 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
     else:
         print("  (no non-cash positions)")
 
-    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate)
+    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate, max_ordinary_offset=max_ordinary_offset)
     print("\n-- Harvestable losses (taxable) --")
     print(f"  Short-Term: {hs['st_lots']} lots, ${hs['st_loss']:,.2f}; "
           f"Long-Term: {hs['lt_lots']} lots, ${hs['lt_loss']:,.2f}; est. benefit ~${hs['est_benefit']:,.2f}.")
@@ -520,7 +586,7 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
     print(f"  {rs['count']} lots ({rs['winners']} winners, {rs['losers']} losers); "
           f"est. tax saved by waiting ~${rs['total_tax_saved_by_waiting']:,.2f}.")
 
-    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
+    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate, max_ordinary_offset)
     print("\n-- If sold now (taxable liquidation estimate) --")
     print(f"  ST {le['st_gain']:+,.2f} + LT {le['lt_gain']:+,.2f} = net {le['total_gain']:+,.2f} "
           f"(ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST and LT netted).")
@@ -616,6 +682,20 @@ def cmd_expiration(db_path, as_of, within, account, top):
           "[informational, not investment advice]")
 
 
+def cmd_dividends(history_path, year):
+    out = tax_tools.dividend_income(history.load_history(history_path), year)
+    label = f" in {year}" if year else ""
+    if out["n"] == 0:
+        print(f"No dividend income found{label}.")
+        return
+    _print_table(["Symbol", "Dividends $"],
+                 [(r["symbol"], r["amount"]) for r in out["by_symbol"]])
+    print(f"\nTotal dividend income{label}: ${out['total']:,.2f} across {out['n']} payment(s).")
+    _print_table(["Account", "Dividends $"],
+                 [(r["account"], r["amount"]) for r in out["by_account"]])
+    print("  [informational, not tax advice; qualified vs ordinary dividends are not distinguished]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -639,6 +719,8 @@ def main(argv=None):
                     help="realized short-term gains these losses can offset (default 0)")
     hp.add_argument("--offsetting-lt-gains", type=float, default=0.0,
                     help="realized long-term gains these losses can offset (default 0)")
+    hp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                    help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
     rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     rp.add_argument("--within", type=int, help="only lots ripening within N days")
@@ -655,6 +737,8 @@ def main(argv=None):
     slp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     slp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     slp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    slp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                     help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     wp = sub.add_parser("washsale", help="cross-account wash-sale guardrail (needs a Fidelity history CSV)")
     wp.add_argument("history", help="path to an Accounts_History.csv")
     wp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
@@ -685,6 +769,8 @@ def main(argv=None):
     dp.add_argument("--within", type=int, default=60, help="ripening horizon in days (default 60)")
     dp.add_argument("--income", type=float, help="taxable income for the 0%% LTCG capacity section")
     dp.add_argument("--ceiling", type=float, help="0%% LTCG bracket top for the capacity section")
+    dp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                    help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     op = sub.add_parser("options", help="options exposure dashboard (premium, notional, moneyness)")
     op.add_argument("--account", help="restrict to accounts matching this text")
     op.add_argument("--as-of", help="YYYY-MM-DD (default today)")
@@ -694,6 +780,9 @@ def main(argv=None):
     ep.add_argument("--account", help="restrict to accounts matching this text")
     ep.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     ep.add_argument("--top", type=int, default=30, help="rows to show (default 30)")
+    dvp = sub.add_parser("dividends", help="dividend income from an Accounts History CSV")
+    dvp.add_argument("history", help="path to an Accounts_History.csv")
+    dvp.add_argument("--year", type=int, help="only dividends in this calendar year (default: all)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -714,14 +803,14 @@ def main(argv=None):
         print(f"({len(rows)} rows)")
     elif args.cmd == "harvest":
         cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate,
-                    args.offsetting_st_gains, args.offsetting_lt_gains)
+                    args.offsetting_st_gains, args.offsetting_lt_gains, args.max_ordinary_offset)
     elif args.cmd == "ripening":
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     elif args.cmd == "concentration":
         cmd_concentration(args.db, args.top, args.threshold)
     elif args.cmd == "sell":
         cmd_sell(args.db, args.symbol, args.shares, args.account, args.strategy,
-                 _as_of(args.as_of), args.st_rate, args.lt_rate)
+                 _as_of(args.as_of), args.st_rate, args.lt_rate, args.max_ordinary_offset)
     elif args.cmd == "washsale":
         cmd_washsale(args.db, args.history, _as_of(args.as_of), args.window, args.same_underlying)
     elif args.cmd == "capacity":
@@ -731,11 +820,13 @@ def main(argv=None):
         cmd_gift(args.db, args.min_gain_pct, args.top, args.account, _as_of(args.as_of), args.lt_rate)
     elif args.cmd == "dashboard":
         cmd_dashboard(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate, args.within,
-                      args.income, args.ceiling)
+                      args.income, args.ceiling, args.max_ordinary_offset)
     elif args.cmd == "options":
         cmd_options(args.db, _as_of(args.as_of), args.account, args.top)
     elif args.cmd == "expiration":
         cmd_expiration(args.db, _as_of(args.as_of), args.within, args.account, args.top)
+    elif args.cmd == "dividends":
+        cmd_dividends(args.history, args.year)
     return 0
 
 

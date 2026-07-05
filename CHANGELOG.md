@@ -6,7 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **`dividends <history.csv> [--year Y]`** aggregates cash dividend income from a Fidelity Accounts
+  History export — total plus per-symbol and per-account breakdowns, optionally filtered to a calendar
+  year. Informational, not tax advice; qualified vs ordinary dividends are not distinguished (the export
+  does not carry that flag).
+- **`--max-ordinary-offset` on `harvest` and `dashboard`** (default `3000`) parameterizes the annual
+  net-capital-loss deduction against ordinary income, so a married-filing-separately filer can set
+  `1500`. `_net_capital_tax`, `harvest`, and `liquidation_estimate` thread the cap through; the default
+  keeps every existing estimate unchanged. Estimates only, not tax advice.
+
+### Documentation
+- **Documented that account taxable/tax-advantaged and wash-sale classification is inferred from the
+  account name.** An unusual name containing "roth"/"ira"/"hsa"/"529" as a whole word (e.g. a taxable
+  "Roth Family Trust") is conservatively treated as tax-advantaged and excluded from harvesting; the
+  README and SKILL now note this and advise verifying the per-account label in `dashboard`.
+
 ### Fixed
+- **Three small correctness/usability fixes.** (a) `options`/`expiration` now label an at-the-money
+  contract (spot == strike) as `ATM` rather than `OTM`. (b) `parse_qty` reads a parenthesized quantity
+  as negative (`"(100)"` → −100), matching the browser exporter's `num()`, instead of silently 0. (c) the
+  `query` validator strips single-quoted string literals before its keyword/`;` scan, so a legitimate
+  literal (`symbol='CREATE'`, `LIKE '%replace%'`) is allowed while real DDL and multi-statement queries
+  stay rejected.
+- **`parse_option` reads standard 8-digit OCC strikes correctly (defensive).** A standard OCC symbol
+  packs the strike as 8 digits in thousandths of a dollar (`00150000` = $150.00); the parser previously
+  read it as a plain integer (150000), overstating notional/assignment cash 1000×. It now divides an
+  exactly-8-digit, no-decimal OCC strike by 1000, leaving Fidelity's short style (`C30` = $30) unchanged.
+  Latent hardening — Fidelity's positions export never emits OCC-style option symbols.
+- **`load` tolerates benign Fidelity header drift instead of bricking.** The exact header-equality check
+  rejected the whole export if Fidelity added, renamed-adjacent, or reordered a single column. Values are
+  now mapped by column NAME, so extra and reordered columns are ignored; only a genuinely MISSING
+  required column raises (with a clear "missing"/"got" diff).
+- **Wash-sale disallowed loss is now quantity-aware.** A small replacement purchase against a larger
+  loss lot previously flagged the *entire* loss; the IRS only disallows the loss on the shares matched by
+  the replacement. Each candidate now reports `affected_shares` and a quantity-apportioned
+  `disallowed_loss` (`loss × matched_shares ÷ loss_shares`), and `washsale` shows a "Disallowed $ (est)"
+  column so the remaining loss stays visibly allowed. An option replacement matched to a stock loss
+  (`--same-underlying`) is counted in underlying-share equivalents (100 shares/contract), and each row
+  is an independent per-lot what-if (the Disallowed column is not additive across rows).
+- **Wash-sale now surfaces non-BUY re-acquisitions (option assignment/exercise, inbound transfers).**
+  A replacement position re-acquired via an option assignment/exercise or an inbound transfer/exchange/
+  journal was classified `OTHER` and silently rated CLEAN. These are now treated as **inferred**
+  acquisitions (counted only when shares actually came in, `signed_qty > 0`) and, because the inference
+  is less certain than an explicit purchase, their status is **capped at REVIEW** — never BLOCKED/CAUTION
+  — so the tool flags them for verification without asserting a definite wash sale. Definite BUY/REINVEST/
+  buy-to-open keep the full severity map.
+- **`wash_category` now uses a word boundary for "529", matching `is_taxable`.** A taxable account whose
+  name merely contained the digits "529" (e.g. "Individual 5291", "X529 Brokerage") was classified as a
+  529 plan for wash-sale severity — softening a genuine taxable wash sale from CAUTION to REVIEW — even
+  though `is_taxable` (with its `\b529\b`) correctly treated it as taxable. The two classifiers now agree.
+- **`sell` now nets short- vs long-term and caps the loss benefit like every other tax command.** Its
+  estimated tax previously applied the ST and LT rates to each bucket independently, so a loss-heavy or
+  mixed-character sale printed a wrong (sometimes ~7×-overstated or fake-negative) number that
+  contradicted the netting used by `harvest`/`liquidation`/`dashboard`. `select_lots`/`sell` now route
+  `est_tax` through `_net_capital_tax` (ST↔LT netting, `--max-ordinary-offset` cap) and surface the
+  deductible-now vs carryforward split. The `min-tax` lot ordering now values a loss at the ordinary
+  (ST) rate too, so its choice stays consistent with the netted estimate. Pure-gain sales are unchanged.
+  Estimates only, not tax advice.
 - **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
   or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable
   loss, as taxable in the "if sold now" liquidation estimate, in per-account unrealized gain/loss, in

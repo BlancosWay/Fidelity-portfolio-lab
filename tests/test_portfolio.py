@@ -156,16 +156,88 @@ class HeaderContractTests(unittest.TestCase):
         expected = os.path.normpath(os.path.join(analyze_dir, "..", "..", "data", "portfolio.db"))
         self.assertEqual(os.path.normpath(portfolio.DEFAULT_DB), expected)
 
-    def test_exact_headers_required(self):
+    def test_header_tolerance_and_missing_required(self):
         fd, db = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._tmp.append(db)
-        reordered = "Symbol,Account," + ",".join(portfolio.EXPECTED_HEADERS[2:])
+        # Reordered + extra columns are tolerated (mapped by name) -- header-only file loads 0 rows.
+        reordered = "Symbol,Account," + ",".join(portfolio.EXPECTED_HEADERS[2:]) + ",Percent Of Account"
+        self.assertEqual(portfolio.load(self._write(reordered), db, AS_OF), 0)
+        # A MISSING required column is still fatal.
+        dropped = ",".join(h for h in portfolio.EXPECTED_HEADERS if h != "Quantity")
         with self.assertRaises(ValueError):
-            portfolio.load(self._write(reordered), db, AS_OF)
-        extra = ",".join(portfolio.EXPECTED_HEADERS) + ",Extra"
+            portfolio.load(self._write(dropped), db, AS_OF)
+        # A DUPLICATED required column is ambiguous (csv.DictReader keeps the last) -> reject.
+        duped = ",".join(portfolio.EXPECTED_HEADERS) + ",Symbol"
         with self.assertRaises(ValueError):
-            portfolio.load(self._write(extra), db, AS_OF)
+            portfolio.load(self._write(duped), db, AS_OF)
+
+
+class DeepDiveReproPortfolioTests(unittest.TestCase):
+    """F5 (load tolerates benign header drift) and F9c (query keyword inside a string literal)."""
+
+    def setUp(self):
+        self._tmp = []
+
+    def tearDown(self):
+        for p in self._tmp:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+    def _csv(self, header_cols, row_vals):
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        self._tmp.append(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(",".join(header_cols) + "\n")
+            fh.write(",".join('"' + str(v) + '"' for v in row_vals) + "\n")
+        return path
+
+    def _db(self):
+        fd, db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._tmp.append(db)
+        return db
+
+    def test_f5_load_tolerates_extra_and_reordered_columns(self):
+        # Benign header drift must NOT brick the load: an extra trailing column AND reordered columns
+        # (values mapped by header name, not position).
+        row = {h: v for h, v in zip(portfolio.EXPECTED_HEADERS,
+                                    ["Ind", "AAPL", "", "Margin", "10", "Jan-05-2026", "", "",
+                                     "$100", "$1000", "$1100", "+$100", "+10%"])}
+        reordered = list(portfolio.EXPECTED_HEADERS)[2:] + list(portfolio.EXPECTED_HEADERS)[:2]
+        cols = reordered + ["Percent Of Account"]
+        vals = [row[h] for h in reordered] + ["5%"]
+        db = self._db()
+        n = portfolio.load(self._csv(cols, vals), db, AS_OF)
+        self.assertEqual(n, 1)
+        got = portfolio.fetch_lots(db)[0]
+        self.assertEqual(got["account"], "Ind")     # mapped by name despite the reorder
+        self.assertEqual(got["symbol"], "AAPL")
+
+    def test_f9c_query_allows_keyword_inside_string_literal(self):
+        # A disallowed keyword appearing only inside a quoted string literal is data, not a statement.
+        stmt = portfolio._validate_query("SELECT * FROM lots WHERE symbol='CREATE'")
+        self.assertIn("CREATE", stmt)
+        stmt2 = portfolio._validate_query("SELECT * FROM lots WHERE description LIKE '%replace%'")
+        self.assertIn("replace", stmt2)
+
+    def test_f9c_ddl_and_second_statement_still_rejected(self):
+        # Literal-stripping must not weaken the guard: unquoted DDL and a real second statement still raise.
+        for bad in ("SELECT 1; DROP TABLE lots",
+                    "DROP TABLE lots",
+                    "SELECT * FROM lots; DELETE FROM lots",
+                    "UPDATE lots SET symbol='x'",
+                    "SELECT * FROM lots WHERE 1=1 DROP TABLE lots",
+                    "SELECT 1 /* ' */ ; DROP TABLE lots -- '",   # comment-hidden ; and DROP
+                    "SELECT 1 -- '\n; DROP TABLE lots"):
+            with self.assertRaises(ValueError, msg=bad):
+                portfolio._validate_query(bad)
+        # A real literal containing '--' or ';' is still allowed (not mistaken for a comment/separator).
+        self.assertIn("A--B", portfolio._validate_query("SELECT * FROM lots WHERE symbol='A--B'"))
+        self.assertIn("a;b", portfolio._validate_query("SELECT * FROM lots WHERE symbol='a;b'"))
 
 
 if __name__ == "__main__":

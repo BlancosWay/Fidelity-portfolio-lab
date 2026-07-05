@@ -46,6 +46,8 @@ Move the exported CSV into the repo's git-ignored `data/` folder (or just use it
 python scripts/analyze/portfolio.py load path/to/fidelity_lots.csv
 ```
 - `--as-of YYYY-MM-DD` sets the date used to classify long vs short (default: today).
+- `load` maps columns by name, so an export with extra or reordered columns still loads; only a
+  missing required column is rejected.
 - `--db PATH` is a **global** option — place it *before* the subcommand (e.g.
   `python scripts/analyze/portfolio.py --db data/portfolio.db load ...`); default `data/portfolio.db`
   (git-ignored).
@@ -69,7 +71,13 @@ and in each account's market value but is excluded from the Long/Short split.
 
 ### 4. Tax / portfolio tools (Tier-1)
 All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
-(default `0.32`) and `--lt-rate` (default `0.15`) only affect the labeled estimates.
+(default `0.32`) and `--lt-rate` (default `0.15`) only affect the labeled estimates. `harvest`/
+`dashboard` also take `--max-ordinary-offset` (default `3000`; set `1500` for married-filing-separately)
+to cap the annual net-capital-loss deduction against ordinary income. Whether an account is taxable vs
+tax-advantaged (and its wash-sale category) is inferred from the account **name** only: a name that
+contains "roth"/"ira"/"hsa"/"529" as a whole word (e.g. a taxable "Roth Family Trust", or a person named
+"Ira" — but not "Kira") is conservatively treated as tax-advantaged and excluded from harvesting/selling
+— check the per-account taxable/advantaged label in `dashboard` and rename the account if it is mislabeled.
 ```
 python scripts/analyze/portfolio.py harvest                       # tax-loss harvest candidates (taxable accounts, short-term first)
 python scripts/analyze/portfolio.py ripening --within 60          # short-term lots about to become long-term
@@ -97,15 +105,19 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   specific-ID instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
   Tax-advantaged lots (IRA/Roth/HSA/BrokerageLink/529) are excluded (their gains are tax-free), and a
   pick spanning accounts prints a per-account NOTE (specific-ID sales are one order per account). Warns
-  when a symbol's per-share prices are inconsistent across lots (a possible export corruption).
+  when a symbol's per-share prices are inconsistent across lots (a possible export corruption). The
+  estimated tax nets ST vs LT and caps a net-loss benefit (`--max-ordinary-offset`, default 3000),
+  surfacing the deductible-now vs carryforward split.
 - **`washsale HISTORY.csv`** — needs a Fidelity **Accounts History** CSV export. For each current
   taxable loss it flags a same-security purchase in the **prior `--window` days (through `--as-of`)**
   in *any* account, graded by the buying account: **BLOCKED** for an IRA/Roth/HSA (loss permanently
   disallowed — Rev. Rul. 2008-5 for IRAs), **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 (no IRS
   wash-sale guidance; prevailing view is the rule does **not** apply — confirm with a tax pro), else
   **CAUTION** for another taxable account; it also prints a forward "don't repurchase within N days"
-  reminder and a ±`--window` audit of past sells. Limitation: it only sees the history window you
-  export, so `CLEAN` is not a guarantee.
+  reminder and a ±`--window` audit of past sells. A non-BUY re-acquisition (option assignment/exercise
+  or an inbound transfer/exchange/journal) is treated as an **inferred** replacement (marked `*`) and
+  capped at **REVIEW**. The disallowed loss is quantity-apportioned (only the loss on shares matched by
+  the replacement is disallowed). Limitation: it only sees the history window you export, so `CLEAN` is not a guarantee.
 - **`capacity`** — bracket-aware realized-gain planner over taxable **long-term gain** lots. Fills
   either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income ceiling you
   supply, selecting the biggest-gain lots first (final lot taken partially). `--within-rate` (default
@@ -134,6 +146,10 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   assignment cash. `--within N` limits to options expiring within N days. Already-expired contracts are
   still listed (with a separate count) but excluded from the live/soon/assignment totals. **Not
   investment advice.**
+- **`dividends HISTORY.csv`** — sums cash dividend income from a Fidelity **Accounts History** CSV
+  (the same export `washsale` uses): total plus per-symbol and per-account breakdowns, with an optional
+  `--year Y` calendar-year filter. Qualified vs ordinary dividends are not distinguished (the export
+  lacks that flag). **Informational, not tax advice.**
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed

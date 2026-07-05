@@ -40,7 +40,7 @@ def is_taxable(account):
 _WASH_EMPLOYER = re.compile(r"brokeragelink|brokerage\s+link|401\s*\(?k\)?|403\s*\(?b\)?", re.IGNORECASE)
 _WASH_IRA = re.compile(r"\bira\b|\broth\b", re.IGNORECASE)
 _WASH_HSA = re.compile(r"\bhsa\b|health\s+savings", re.IGNORECASE)
-_WASH_529 = re.compile(r"529", re.IGNORECASE)
+_WASH_529 = re.compile(r"\b529\b", re.IGNORECASE)
 
 # Severity of a replacement buy landing in each account category (informational, not tax advice):
 #   ira/hsa  -> BLOCKED : IRA/Roth loss is permanently disallowed (Rev. Rul. 2008-5); HSA is treated
@@ -185,15 +185,16 @@ def recompute_term(lot, as_of):
     return holding_term(lot_acquired_date(lot), as_of) or (lot.get("term") or "")
 
 
-def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
+def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, offsetting_lt_gains=0.0,
+            max_ordinary_offset=3000.0):
     """Rank taxable loss lots for harvesting: short-term first (ST losses offset ordinary income),
     then by loss magnitude (most negative first).
 
     Returns ``(rows, summary)``. ``est_benefit`` is the current-year tax reduction from realizing these
     losses, computed as tax-without minus tax-with via ``_net_capital_tax`` against any known
     ``offsetting_st_gains``/``offsetting_lt_gains`` (default 0 = no offsetting gains, so the benefit is
-    the $3,000-capped ordinary-income offset). ``carryforward_loss`` is the excess that carries to
-    future years. An estimate, not tax advice."""
+    the ``max_ordinary_offset``-capped ordinary-income offset). ``carryforward_loss`` is the excess that
+    carries to future years. An estimate, not tax advice."""
     rows = []
     for lot in taxable_loss_candidates(lots):
         rows.append({
@@ -210,9 +211,10 @@ def harvest(lots, as_of, st_rate=0.32, lt_rate=0.15, offsetting_st_gains=0.0, of
     rows.sort(key=lambda r: (0 if r["term"] == "Short-Term" else 1, r["loss"]))
     st_loss = sum(r["loss"] for r in rows if r["term"] == "Short-Term")   # <= 0
     lt_loss = sum(r["loss"] for r in rows if r["term"] == "Long-Term")    # <= 0
-    tax_without = _net_capital_tax(offsetting_st_gains, offsetting_lt_gains, st_rate, lt_rate)
+    tax_without = _net_capital_tax(offsetting_st_gains, offsetting_lt_gains, st_rate, lt_rate,
+                                   max_ordinary_offset)
     tax_with = _net_capital_tax(offsetting_st_gains + st_loss, offsetting_lt_gains + lt_loss,
-                                st_rate, lt_rate)
+                                st_rate, lt_rate, max_ordinary_offset)
     summary = {
         "st_loss": st_loss,
         "lt_loss": lt_loss,
@@ -412,8 +414,12 @@ def _order_sale_lots(prepped, strategy, st_rate, lt_rate):
         return sorted(prepped, key=lambda l: l["per_share_gain"])
 
     def impact(l):  # min-tax: ascending per-share tax impact (losses first, small ST gain < large LT gain)
-        rate = st_rate if l["term"] == "Short-Term" else lt_rate
-        return l["per_share_gain"] * rate
+        g = l["per_share_gain"]
+        # A realized loss benefits by offsetting income (up to the annual cap) at the ordinary/ST rate,
+        # so value a loss at st_rate; a gain is taxed at its own term rate. This keeps the min-tax
+        # ordering consistent with the netted est_tax reported via _net_capital_tax.
+        rate = st_rate if g < 0 else (st_rate if l["term"] == "Short-Term" else lt_rate)
+        return g * rate
     return sorted(prepped, key=impact)
 
 
@@ -432,14 +438,16 @@ def _consume_lots(ordered, shares):
 
 
 def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=None,
-                st_rate=0.32, lt_rate=0.15):
+                st_rate=0.32, lt_rate=0.15, max_ordinary_offset=3000.0):
     """Choose which specific lots to sell to fulfill ``shares`` of ``symbol`` under a strategy:
     hifo (highest cost first), fifo (oldest first), loss-first, or min-tax (ascending per-share tax
     impact, default). Only **taxable** accounts are considered (tax-advantaged lots are excluded --
     their gains are tax-free and a specific-ID sale there isn't a tax-optimized taxable sale). Returns
     ``(picks, summary)`` with realized gain split ST/LT, the delta vs FIFO, and ``accounts`` /
-    ``multi_account`` (a sale spanning accounts is more than one broker order). Proceeds are estimated
-    from current value (a per-share price estimate, not tax advice)."""
+    ``multi_account`` (a sale spanning accounts is more than one broker order). ``est_tax`` nets the
+    realized ST vs LT via ``_net_capital_tax`` (a net loss benefit is capped at ``max_ordinary_offset``,
+    with the residual as ``carryforward``), consistent with harvest/liquidation/dashboard. Proceeds are
+    estimated from current value (a per-share price estimate, not tax advice)."""
     as_of = as_of or dt.date.today()
     prepped = _prep_sale_lots(lots, symbol, account, as_of)
     picks, remaining = _consume_lots(_order_sale_lots(prepped, strategy, st_rate, lt_rate), shares)
@@ -449,6 +457,7 @@ def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=No
     lt_gain = sum(p["realized_gain"] for p in picks if p["term"] == "Long-Term")
     fifo_total = sum(p["realized_gain"] for p in fifo_picks)
     accounts = sorted({p["account"] for p in picks}, key=lambda a: a or "")
+    nct = _net_capital_tax(st_gain, lt_gain, st_rate, lt_rate, max_ordinary_offset)
     summary = {
         "strategy": strategy,
         "symbol": (symbol or "").strip().upper(),
@@ -461,7 +470,11 @@ def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=No
         "lt_gain": lt_gain,
         "fifo_realized_gain": fifo_total,
         "delta_vs_fifo": total - fifo_total,
-        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+        "est_tax": nct["est_tax"],
+        "net_gain": nct["net_gain"],
+        "net_loss": nct["net_loss"],
+        "deductible_loss": nct["deductible_loss"],
+        "carryforward": nct["carryforward"],
         "accounts": accounts,
         "multi_account": len(accounts) > 1,
     }
@@ -479,12 +492,21 @@ def _securities_match(a, b, same_underlying):
 
 
 def _is_acquisition(rec):
-    """A purchase that can trigger a wash sale: an equity BUY/REINVEST, or a buy-to-open of a long
-    option ("YOU BOUGHT OPENING" -> action_kind OPTION_OPEN). Writing an option (sell-to-open) is not
-    an acquisition, so it is excluded."""
+    """A purchase that can trigger a wash sale: a definite equity BUY/REINVEST, a buy-to-open of a long
+    option ("YOU BOUGHT OPENING" -> action_kind OPTION_OPEN), or an INFERRED re-acquisition via option
+    assignment/exercise or an inbound transfer/exchange/journal (action_kind ACQUIRE_INFERRED) that
+    actually brought shares in (``signed_qty > 0``). Writing an option (sell-to-open) or an outbound
+    transfer (signed_qty <= 0) is not an acquisition, so it is excluded."""
     if rec["action_kind"] in ("BUY", "REINVEST"):
         return True
-    return rec["action_kind"] == "OPTION_OPEN" and (rec.get("action") or "").upper().startswith("YOU BOUGHT")
+    if rec["action_kind"] == "OPTION_OPEN" and (rec.get("action") or "").upper().startswith("YOU BOUGHT"):
+        return True
+    if rec["action_kind"] == "ACQUIRE_INFERRED":
+        try:
+            return float(rec.get("signed_qty")) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
@@ -501,7 +523,9 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
         alone, so it is labeled "loss unknown" rather than asserted as a wash sale.
 
     ``history`` records are the dicts returned by ``history.load_history``. Identity uses security_key.
-    Returns ``{"candidates": [...], "realized": [...], "summary": {...}}``."""
+    Each candidate also carries ``affected_shares`` (shares matched by replacement purchases) and
+    ``disallowed_loss`` (the quantity-apportioned share of the loss that is disallowed; the rest of the
+    loss stays allowed). Returns ``{"candidates": [...], "realized": [...], "summary": {...}}``."""
     buys = [h for h in history if _is_acquisition(h)]
     sells = [h for h in history if h["action_kind"] == "SELL"]
 
@@ -512,19 +536,43 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
     cand_rows = []
     for lot in loss_candidates:
         sk = security_key(lot.get("symbol"))
+        loss_is_option = sk["kind"] == "option"
         triggers = []
         for b in buys:
             if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying):
                 category = wash_category(b["account"])
+                inferred = b["action_kind"] == "ACQUIRE_INFERRED"
+                # An inferred (non-BUY) re-acquisition is never asserted as a definite wash sale: cap it
+                # at REVIEW regardless of account category. Definite BUY/REINVEST/buy-to-open keep the map.
+                severity = "REVIEW" if inferred else WASH_SEVERITY[category]
+                # An option replacement controls 100 shares/contract; express it in underlying-share
+                # equivalents when apportioning a STOCK loss (same-underlying), else keep native units.
+                qty_shares = b["abs_qty"] * (100 if b.get("kind") == "option" and not loss_is_option else 1)
                 triggers.append(
                     {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
-                     "qty": b["abs_qty"], "category": category, "severity": WASH_SEVERITY[category]})
+                     "qty": b["abs_qty"], "qty_shares": qty_shares, "category": category,
+                     "severity": severity, "inferred": inferred})
         if not triggers:
             status = "CLEAN"
         else:
             status = max((t["severity"] for t in triggers), key=lambda s: _STATUS_RANK[s])
+        # Quantity-aware disallowed loss (a per-lot what-if): only the loss on shares matched by
+        # replacement purchases is disallowed. affected_shares = min(total matched replacement shares,
+        # loss-lot qty); the disallowed amount is that share fraction of the loss (the rest stays allowed).
+        try:
+            loss_qty = abs(float(lot.get("quantity")))
+        except (TypeError, ValueError):
+            loss_qty = 0.0
+        try:
+            loss_amt = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            loss_amt = 0.0
+        matched_qty = sum(t["qty_shares"] for t in triggers)
+        affected_shares = min(matched_qty, loss_qty) if loss_qty > 0 else 0.0
+        disallowed_loss = (loss_amt * affected_shares / loss_qty) if loss_qty > 0 else 0.0
         cand_rows.append({"symbol": lot.get("symbol"), "account": lot.get("account"),
-                          "loss": lot.get("gain_loss"), "status": status, "triggers": triggers})
+                          "loss": lot.get("gain_loss"), "status": status, "triggers": triggers,
+                          "affected_shares": affected_shares, "disallowed_loss": disallowed_loss})
 
     realized = []
     for sale in sells:
@@ -839,12 +887,13 @@ def unrealized_by_account(lots, as_of):
     return rows, summary
 
 
-def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15):
+def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15, max_ordinary_offset=3000.0):
     """Single-year capital-gains tax on signed short-term (``st``) and long-term (``lt``) totals
     (an estimate, NOT tax advice). Nets ST and LT together: a loss in one bucket first offsets a gain
     in the other. A residual net GAIN is taxed at the surviving (winning) bucket's rate and is never
-    negative. A residual net LOSS offsets ordinary income up to $3,000/yr at ``st_rate`` (a benefit),
-    with the remainder carried forward. Ignores state tax, NIIT, and wash-sale interactions.
+    negative. A residual net LOSS offsets ordinary income up to ``max_ordinary_offset``/yr (default
+    $3,000; married-filing-separately is $1,500) at ``st_rate`` (a benefit), with the remainder carried
+    forward. Ignores state tax, NIIT, and wash-sale interactions.
 
     Returns ``{est_tax, net_gain, net_loss, deductible_loss, carryforward}``."""
     net = st + lt
@@ -857,18 +906,18 @@ def _net_capital_tax(st, lt, st_rate=0.32, lt_rate=0.15):
         return {"est_tax": est_tax, "net_gain": net, "net_loss": 0.0,
                 "deductible_loss": 0.0, "carryforward": 0.0}
     loss = -net
-    deductible = min(3000.0, loss)
+    deductible = min(max(max_ordinary_offset, 0.0), loss)   # clamp: a negative cap can't create a benefit
     return {"est_tax": -(deductible * st_rate), "net_gain": 0.0, "net_loss": loss,
             "deductible_loss": deductible, "carryforward": loss - deductible}
 
 
-def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
+def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15, max_ordinary_offset=3000.0):
     """Estimated tax if every taxable non-cash lot were sold now (informational, NOT tax advice).
 
     Sums signed short-term and long-term ``gain_loss`` (term via ``recompute_term``) over taxable,
     LIVE (quantity > 0) lots, then nets them via ``_net_capital_tax``: a net gain is taxed (never
-    negative), a net loss yields a benefit capped at the $3,000 ordinary-income offset plus a
-    carryforward."""
+    negative), a net loss yields a benefit capped at the ``max_ordinary_offset`` ordinary-income offset
+    plus a carryforward."""
     st_gain = lt_gain = 0.0
     n_lots = 0
     for lot in lots:
@@ -886,7 +935,7 @@ def liquidation_estimate(lots, as_of, st_rate=0.32, lt_rate=0.15):
         else:
             continue
         n_lots += 1
-    net = _net_capital_tax(st_gain, lt_gain, st_rate, lt_rate)
+    net = _net_capital_tax(st_gain, lt_gain, st_rate, lt_rate, max_ordinary_offset)
     return {
         "st_gain": st_gain,
         "lt_gain": lt_gain,
@@ -950,7 +999,14 @@ def parse_option(lot):
         except ValueError:
             expiry = None
         otype = "call" if m.group(5) == "C" else "put"
-        strike = float(m.group(6))
+        strike_tok = m.group(6)
+        # Standard OCC packs the strike as 8 digits in thousandths of a dollar (e.g. "00150000" = 150.00);
+        # Fidelity's short history style writes the plain strike (e.g. "C30" = 30). Disambiguate on the
+        # exact 8-digit, no-decimal OCC encoding so a short-style strike is never mis-scaled.
+        if len(strike_tok) == 8 and "." not in strike_tok:
+            strike = int(strike_tok) / 1000.0
+        else:
+            strike = float(strike_tok)
     return {"underlying": underlying, "strike": strike, "type": otype, "expiry": expiry,
             "contracts": contracts, "long": contracts >= 0, "multiplier": 100}
 
@@ -982,6 +1038,8 @@ def underlying_spots(lots):
 def _moneyness(otype, strike, spot):
     if spot is None:
         return "n/a"
+    if spot == strike:
+        return "ATM"
     if otype == "call":
         return "ITM" if spot > strike else "OTM"
     return "ITM" if spot < strike else "OTM"
@@ -1154,3 +1212,38 @@ def expiration_calendar(lots, as_of, within=None, account=None):
         "expired": sum(1 for r in rows if r["days"] < 0),
     }
     return rows, summary
+
+
+def dividend_income(history, year=None):
+    """Aggregate cash dividend income from a Fidelity Accounts-History export (informational, NOT tax
+    advice). Sums the ``amount`` of ``DIVIDEND`` actions, optionally only those in calendar ``year``.
+
+    Returns ``{total, by_symbol, by_account, n}`` where the two breakdowns are lists of
+    ``{symbol|account, amount}`` (by_symbol sorted by amount desc, by_account by name). Qualified vs
+    ordinary dividends are NOT distinguished (a Fidelity history export does not carry that flag)."""
+    total = 0.0
+    by_symbol, by_account = {}, {}
+    n = 0
+    for rec in history:
+        if rec.get("action_kind") != "DIVIDEND":
+            continue
+        d = rec.get("date")
+        if year is not None and (d is None or d.year != year):
+            continue
+        try:
+            amt = float(rec.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        total += amt
+        sym = (rec.get("symbol") or "").strip() or "(cash)"
+        acct = (rec.get("account") or "").strip()
+        by_symbol[sym] = by_symbol.get(sym, 0.0) + amt
+        by_account[acct] = by_account.get(acct, 0.0) + amt
+        n += 1
+    return {
+        "total": total,
+        "by_symbol": [{"symbol": k, "amount": round(v, 2)}
+                      for k, v in sorted(by_symbol.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "by_account": [{"account": k, "amount": round(v, 2)} for k, v in sorted(by_account.items())],
+        "n": n,
+    }

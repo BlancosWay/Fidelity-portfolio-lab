@@ -48,21 +48,22 @@ Real data:
 ## Commands
 | Command | Purpose |
 |---|---|
-| `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). |
+| `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). Tolerates extra/reordered columns; only a missing required column is fatal. |
 | `summary [--as-of YYYY-MM-DD]` | Units per symbol across accounts; long vs short; per-account by term (term recomputed as-of). |
 | `symbol <SYM> [--as-of YYYY-MM-DD]` | Per-lot detail + totals for one symbol (term recomputed as-of). |
 | `accounts` | Accounts overview. |
 | `query "<SELECT ...>"` | Ad-hoc **read-only** SQL over the `lots` table. |
-| `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + $3k cap. |
+| `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X] [--max-ordinary-offset X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + the ordinary-loss cap (`--max-ordinary-offset`, default $3k; MFS $1.5k). |
 | `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index (options and non-positive-value symbols excluded from the equity ranking). |
-| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded. |
+| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R] [--max-ordinary-offset X]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded; est. tax nets ST/LT + caps the loss benefit. |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |
-| `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
+| `dashboard [--within N] [--income X] [--ceiling X] [--as-of D] [--st-rate R] [--lt-rate R] [--max-ordinary-offset X]` | Year-end snapshot: unrealized ST/LT by account, harvestable losses, ripening, liquidation tax, 0% LTCG capacity. |
 | `options [--account A] [--as-of D] [--top N]` | Options exposure: premium at risk, notional, moneyness (ITM/OTM), per-underlying directional bias, covered/naked (expired excluded). |
 | `expiration [--within N] [--account A] [--as-of D] [--top N]` | Option expiration & assignment calendar: days-to-expiry, premium at risk by expiry, moneyness, short-put assignment cash. |
+| `dividends <history.csv> [--year Y]` | Dividend income from an Accounts History CSV: total + per-symbol/per-account, optional calendar-year filter. |
 
 > `--db PATH` is a **global** option — place it *before* the subcommand (default `data/portfolio.db`),
 > e.g. `python scripts/analyze/portfolio.py --db data/portfolio.db summary`. `--as-of YYYY-MM-DD`
@@ -76,13 +77,21 @@ Real data:
 > prints `No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (`query` with a non-zero code).
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches
 > IRA/Roth/HSA/BrokerageLink/401k/403b/529 is treated as tax-advantaged and excluded, and every other
-> account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
+> account is treated as taxable. This classification is inferred from the account **name** only, so an
+> unusual name that contains one of those tokens as a whole word (e.g. a taxable trust named "Roth Family
+> Trust", or a person named "Ira" — but not "Kira", which doesn't word-match) is conservatively treated as
+> tax-advantaged and excluded from harvesting — check the per-account taxable/advantaged label in
+> `dashboard` and rename the account if it is mislabeled. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
 > window you export (so `CLEAN` is not a guarantee): for each current taxable loss it flags a
 > same-security purchase in the **prior `--window` days through `--as-of`** in *any* account —
 > **BLOCKED** for an IRA/Roth/HSA buy (permanent disallowance, e.g. Rev. Rul. 2008-5 for IRAs),
 > **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 buy (no IRS guidance; prevailing view is the rule
 > does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
-> within N days" reminder and a ±`--window` audit of past sells.
+> within N days" reminder and a ±`--window` audit of past sells. A non-BUY re-acquisition (option
+> assignment/exercise or an inbound transfer/exchange/journal, marked `*`) is treated as an **inferred**
+> replacement and capped at **REVIEW** (never asserted as a definite wash sale). The disallowed loss is
+> **quantity-apportioned** — only the loss on shares matched by the replacement is disallowed (shown as
+> "Disallowed $ (est)").
 >
 > `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
 > to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income

@@ -97,5 +97,14 @@ class FetchLotsTests(unittest.TestCase):
             conn.close()
 
 
+class DeepDiveReproCommonTests(unittest.TestCase):
+    """F9b: a parenthesized-negative quantity should parse to a negative number (like the exporter's
+    num()), not silently collapse to 0.0."""
+
+    def test_f9b_parse_qty_parenthesized_negative(self):
+        self.assertEqual(common.parse_qty("(100)"), -100.0)
+        self.assertEqual(common.parse_qty("(1,234.5)"), -1234.5)
+
+
 if __name__ == "__main__":
     unittest.main()

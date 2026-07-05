@@ -69,6 +69,23 @@ class FetchLotsCliTests(unittest.TestCase):
 
 
 class HarvestCliTests(unittest.TestCase):
+    def test_max_ordinary_offset_flag(self):
+        # A large ST loss with --max-ordinary-offset 1500 caps the benefit and the note text.
+        db = build_db([
+            _row("Individual - TOD Test", "BIG", 10, "Jan-05-2026",
+                 "$2,000.00", "$20,000.00", "$5,000.00", "-$15,000.00", "-75.00%"),
+        ])
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["--db", db, "harvest", "--as-of", "2026-07-01",
+                                "--max-ordinary-offset", "1500"])
+            text = out.getvalue()
+        finally:
+            os.unlink(db)
+        self.assertIn("1,500", text)              # capped-offset note reflects the flag
+        self.assertIn("480.00", text)             # benefit = 1500 * 0.32
+
     def test_output(self):
         db = build_db(SAMPLE_ROWS)
         try:
@@ -173,6 +190,20 @@ SELL_ROWS = [
 
 
 class SellCliTests(unittest.TestCase):
+    def test_net_loss_sale_shows_netted_capped_tax(self):
+        # Selling a large LT-loss lot: est_tax is the $3k-capped benefit + carryforward, not lt_rate*loss.
+        db = build_db([
+            _row("Individual - TOD Test", "BIGL", 10, "Jan-05-2020",
+                 "$5,100.00", "$51,000.00", "$1,000.00", "-$50,000.00", "-98.04%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "BIGL", 10, None, "min-tax", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("carries forward", text)
+        self.assertIn("960.00", text)        # capped benefit 3000 * 0.32
+        self.assertNotIn("7,500", text)       # NOT the naive lt_rate * 50000 loss
+
     def test_output(self):
         db = build_db(SELL_ROWS)
         try:
@@ -230,6 +261,25 @@ def build_history(rows):
 
 
 class WashSaleCliTests(unittest.TestCase):
+    def test_disallowed_loss_is_quantity_apportioned(self):
+        # 100-share loss but only a 1-share taxable replacement -> only ~1/100 of the loss is disallowed.
+        db = build_db([
+            _row("Individual - TOD Test", "AAA", 100, "Jun-15-2026",
+                 "$11.00", "$1,100.00", "$1,000.00", "-$100.00", "-9.09%"),
+        ])
+        hp = build_history([
+            '06-20-2026,Joint Brokerage Test,444,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,1,0,"","","",-10,06-22-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, False)
+        finally:
+            os.unlink(db)
+            os.unlink(hp)
+        self.assertIn("CAUTION", text)        # taxable replacement
+        self.assertIn("Disallowed", text)     # the apportioned column is shown
+        self.assertIn("-1.0", text)           # disallowed ~ -100 * (1/100) = -1.00 (partial)
+        self.assertIn("-100.0", text)         # the full loss is still shown (rest stays allowed)
+
     def test_blocked_output(self):
         db = build_db([
             _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),
@@ -670,6 +720,41 @@ class Bug5ReportTests(unittest.TestCase):
             os.unlink(db)
         self.assertIn("Long-Term", late)
         self.assertIn("10.0 long", late)     # totals reflect the recomputed long term
+
+
+class DividendsCliTests(unittest.TestCase):
+    def test_dividends_total_and_year_filter(self):
+        hp = build_history([
+            '03-01-2026,Individual - TOD Test,111,DIVIDEND RECEIVED (AAA),AAA,AAA CO,Cash,0,,USD,,,0,"","","",50.00,03-01-2026',
+            '06-01-2025,Individual - TOD Test,111,DIVIDEND RECEIVED (BBB),BBB,BBB CO,Cash,0,,USD,,,0,"","","",25.00,06-01-2025',
+            '06-01-2026,Individual - TOD Test,111,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-03-2026',
+        ])
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["dividends", hp])
+            all_text = out.getvalue()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["dividends", hp, "--year", "2026"])
+            y2026 = out.getvalue()
+        finally:
+            os.unlink(hp)
+        self.assertIn("75.00", all_text)      # 50 + 25 across all years; the BUY (-100) is excluded
+        self.assertIn("AAA", all_text)
+        self.assertIn("not tax advice", all_text)
+        self.assertIn("50.00", y2026)         # only 2026's $50
+        self.assertNotIn("75.00", y2026)      # 2025's $25 excluded by --year
+
+    def test_no_dividends_message(self):
+        hp = build_history([
+            '06-01-2026,Individual - TOD Test,111,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-03-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_dividends, hp, None)
+        finally:
+            os.unlink(hp)
+        self.assertIn("No dividend income", text)
 
 
 if __name__ == "__main__":
