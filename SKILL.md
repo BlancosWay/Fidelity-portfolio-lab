@@ -46,6 +46,8 @@ Move the exported CSV into the repo's git-ignored `data/` folder (or just use it
 python scripts/analyze/portfolio.py load path/to/fidelity_lots.csv
 ```
 - `--as-of YYYY-MM-DD` sets the date used to classify long vs short (default: today).
+- `load` maps columns by name, so an export with extra or reordered columns still loads; only a
+  missing required column is rejected.
 - `--db PATH` is a **global** option — place it *before* the subcommand (e.g.
   `python scripts/analyze/portfolio.py --db data/portfolio.db load ...`); default `data/portfolio.db`
   (git-ignored).

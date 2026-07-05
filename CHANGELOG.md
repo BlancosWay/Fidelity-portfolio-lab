@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **`load` tolerates benign Fidelity header drift instead of bricking.** The exact header-equality check
+  rejected the whole export if Fidelity added, renamed-adjacent, or reordered a single column. Values are
+  now mapped by column NAME, so extra and reordered columns are ignored; only a genuinely MISSING
+  required column raises (with a clear "missing"/"got" diff).
 - **Wash-sale disallowed loss is now quantity-aware.** A small replacement purchase against a larger
   loss lot previously flagged the *entire* loss; the IRS only disallows the loss on the shares matched by
   the replacement. Each candidate now reports `affected_shares` and a quantity-apportioned

@@ -122,10 +122,20 @@ def load(csv_path, db_path=DEFAULT_DB, as_of=None):
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
-        if headers != EXPECTED_HEADERS:
+        # Tolerate benign header drift: values are mapped by NAME (below), so extra or reordered columns
+        # are fine; only a MISSING required column is fatal.
+        missing = [h for h in EXPECTED_HEADERS if h not in headers]
+        if missing:
             raise ValueError(
-                "CSV headers do not match the expected export schema.\n"
-                f"  expected: {EXPECTED_HEADERS}\n  got:      {headers}")
+                "CSV is missing required export columns.\n"
+                f"  required: {EXPECTED_HEADERS}\n  missing:  {missing}\n  got:      {headers}")
+        # A duplicated required column is ambiguous (csv.DictReader keeps only the last), so reject it
+        # rather than silently mapping the wrong column.
+        dupes = [h for h in EXPECTED_HEADERS if headers.count(h) > 1]
+        if dupes:
+            raise ValueError(
+                "CSV has duplicate required columns (ambiguous mapping).\n"
+                f"  duplicated: {dupes}\n  got:        {headers}")
         rows = list(reader)
 
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)

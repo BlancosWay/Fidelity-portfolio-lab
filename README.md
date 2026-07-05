@@ -48,7 +48,7 @@ Real data:
 ## Commands
 | Command | Purpose |
 |---|---|
-| `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). |
+| `load <csv> [--as-of YYYY-MM-DD]` | Load an export; recompute term as-of a date (default today). Tolerates extra/reordered columns; only a missing required column is fatal. |
 | `summary [--as-of YYYY-MM-DD]` | Units per symbol across accounts; long vs short; per-account by term (term recomputed as-of). |
 | `symbol <SYM> [--as-of YYYY-MM-DD]` | Per-lot detail + totals for one symbol (term recomputed as-of). |
 | `accounts` | Accounts overview. |

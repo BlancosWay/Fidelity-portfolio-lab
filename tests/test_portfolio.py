@@ -156,16 +156,21 @@ class HeaderContractTests(unittest.TestCase):
         expected = os.path.normpath(os.path.join(analyze_dir, "..", "..", "data", "portfolio.db"))
         self.assertEqual(os.path.normpath(portfolio.DEFAULT_DB), expected)
 
-    def test_exact_headers_required(self):
+    def test_header_tolerance_and_missing_required(self):
         fd, db = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         self._tmp.append(db)
-        reordered = "Symbol,Account," + ",".join(portfolio.EXPECTED_HEADERS[2:])
+        # Reordered + extra columns are tolerated (mapped by name) -- header-only file loads 0 rows.
+        reordered = "Symbol,Account," + ",".join(portfolio.EXPECTED_HEADERS[2:]) + ",Percent Of Account"
+        self.assertEqual(portfolio.load(self._write(reordered), db, AS_OF), 0)
+        # A MISSING required column is still fatal.
+        dropped = ",".join(h for h in portfolio.EXPECTED_HEADERS if h != "Quantity")
         with self.assertRaises(ValueError):
-            portfolio.load(self._write(reordered), db, AS_OF)
-        extra = ",".join(portfolio.EXPECTED_HEADERS) + ",Extra"
+            portfolio.load(self._write(dropped), db, AS_OF)
+        # A DUPLICATED required column is ambiguous (csv.DictReader keeps the last) -> reject.
+        duped = ",".join(portfolio.EXPECTED_HEADERS) + ",Symbol"
         with self.assertRaises(ValueError):
-            portfolio.load(self._write(extra), db, AS_OF)
+            portfolio.load(self._write(duped), db, AS_OF)
 
 
 class DeepDiveReproPortfolioTests(unittest.TestCase):
