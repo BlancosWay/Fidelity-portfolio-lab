@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **`wash_category` now uses a word boundary for "529", matching `is_taxable`.** A taxable account whose
+  name merely contained the digits "529" (e.g. "Individual 5291", "X529 Brokerage") was classified as a
+  529 plan for wash-sale severity — softening a genuine taxable wash sale from CAUTION to REVIEW — even
+  though `is_taxable` (with its `\b529\b`) correctly treated it as taxable. The two classifiers now agree.
 - **`sell` now nets short- vs long-term and caps the loss benefit like every other tax command.** Its
   estimated tax previously applied the ST and LT rates to each bucket independently, so a loss-heavy or
   mixed-character sale printed a wrong (sometimes ~7×-overstated or fake-negative) number that

@@ -40,7 +40,7 @@ def is_taxable(account):
 _WASH_EMPLOYER = re.compile(r"brokeragelink|brokerage\s+link|401\s*\(?k\)?|403\s*\(?b\)?", re.IGNORECASE)
 _WASH_IRA = re.compile(r"\bira\b|\broth\b", re.IGNORECASE)
 _WASH_HSA = re.compile(r"\bhsa\b|health\s+savings", re.IGNORECASE)
-_WASH_529 = re.compile(r"529", re.IGNORECASE)
+_WASH_529 = re.compile(r"\b529\b", re.IGNORECASE)
 
 # Severity of a replacement buy landing in each account category (informational, not tax advice):
 #   ira/hsa  -> BLOCKED : IRA/Roth loss is permanently disallowed (Rev. Rul. 2008-5); HSA is treated
