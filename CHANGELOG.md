@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- **`--max-ordinary-offset` on `harvest` and `dashboard`** (default `3000`) parameterizes the annual
+  net-capital-loss deduction against ordinary income, so a married-filing-separately filer can set
+  `1500`. `_net_capital_tax`, `harvest`, and `liquidation_estimate` thread the cap through; the default
+  keeps every existing estimate unchanged. Estimates only, not tax advice.
+
 ### Fixed
 - **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
   or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable

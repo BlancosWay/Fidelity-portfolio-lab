@@ -1156,5 +1156,93 @@ class Tier2ReproTests(unittest.TestCase):
         self.assertEqual(len(tt.gift_candidates([gain], self.AS_OF)[0]), 1)
 
 
+class DeepDiveReproTests(unittest.TestCase):
+    """Failing reproductions for the deep-dive gaps (F1-F10). Synthetic data only.
+
+    These encode the DESIRED (fixed) behavior and fail against current code, proving each bug."""
+    AS_OF = dt.date(2026, 7, 1)
+
+    # F1: sell/select_lots est_tax must net ST vs LT and cap the ordinary-loss benefit at $3,000,
+    # exactly like harvest/liquidation/dashboard's _net_capital_tax (currently naive per-bucket).
+    def test_f1_sell_est_tax_nets_and_caps(self):
+        lots = [lot(symbol="LOSS", quantity=10.0, date_acquired="2020-01-01", term="Long-Term",
+                    cost_basis_total=51000.0, current_value=1000.0, gain_loss=-50000.0)]
+        _, s = tt.select_lots(lots, "LOSS", 10, "min-tax", None, self.AS_OF)
+        self.assertAlmostEqual(s["est_tax"], -960.0)          # capped $3k offset, not -7500
+        self.assertAlmostEqual(s["deductible_loss"], 3000.0)  # new surfaced field
+        self.assertAlmostEqual(s["carryforward"], 47000.0)
+
+    # F2: option exercise/assignment and transfer/exchange-in acquisitions are wash-sale replacements.
+    def test_f2_nonbuy_acquisitions_are_replacements(self):
+        import history as H
+        loss = lot(symbol="AAA", quantity=100.0, gain_loss=-1000.0, date_acquired="2026-06-01",
+                   current_value=5000.0, cost_basis_total=6000.0)
+        for action in ["YOU EXERCISED AAA CALL", "ASSIGNED", "TRANSFERRED IN", "EXCHANGE IN"]:
+            rec = hrec(dt.date(2026, 6, 10), "Roth IRA", "AAA",
+                       kind=H.classify_action(action), action=action)
+            self.assertTrue(tt._is_acquisition(rec), action)
+            res = tt.washsale([loss], [rec], dt.date(2026, 6, 15), 30)
+            self.assertNotEqual(res["candidates"][0]["status"], "CLEAN", action)
+
+    # F3: the disallowed loss is quantity-aware (apportioned to matched replacement shares),
+    # not the whole loss when only a fraction of the shares are replaced.
+    def test_f3_washsale_disallowed_is_quantity_aware(self):
+        loss = lot(symbol="AAA", quantity=100.0, gain_loss=-1000.0, date_acquired="2026-06-01",
+                   current_value=5000.0, cost_basis_total=6000.0)
+        rec = hrec(dt.date(2026, 6, 10), "Joint Brokerage Test", "AAA", kind="BUY", qty=1.0)
+        c = tt.washsale([loss], [rec], dt.date(2026, 6, 15), 30)["candidates"][0]
+        self.assertAlmostEqual(c["affected_shares"], 1.0)     # only 1 of 100 shares replaced
+        self.assertAlmostEqual(c["disallowed_loss"], -10.0)   # ~1/100 of the -1000 loss
+
+    # F4: wash_category "529" needs a word boundary so it agrees with is_taxable.
+    def test_f4_wash_category_529_boundary(self):
+        for a in ["Individual 5291", "X529 Brokerage"]:
+            self.assertTrue(tt.is_taxable(a), a)
+            self.assertEqual(tt.wash_category(a), "taxable", a)
+        self.assertEqual(tt.wash_category("My 529 College"), "529")   # a real 529 still classified
+
+    # F6: the $3,000 ordinary-loss cap is parameterizable (e.g. MFS = $1,500).
+    def test_f6_ordinary_offset_cap_param(self):
+        r = tt._net_capital_tax(-5000.0, 0.0, max_ordinary_offset=1500.0)
+        self.assertAlmostEqual(r["deductible_loss"], 1500.0)
+        self.assertAlmostEqual(r["carryforward"], 3500.0)
+
+    def test_f6_harvest_and_liquidation_respect_cap(self):
+        # A large ST loss: the current-year benefit/deduction is capped at max_ordinary_offset.
+        big = lot(symbol="BIG", quantity=10.0, date_acquired="2026-06-01", term="Short-Term",
+                  cost_basis_total=20000.0, current_value=5000.0, gain_loss=-15000.0)
+        _, hs = tt.harvest([big], self.AS_OF, 0.32, 0.15, max_ordinary_offset=1500.0)
+        self.assertAlmostEqual(hs["est_benefit"], 1500.0 * 0.32)   # capped at $1,500 (MFS)
+        le = tt.liquidation_estimate([big], self.AS_OF, 0.32, 0.15, max_ordinary_offset=1500.0)
+        self.assertAlmostEqual(le["deductible_loss"], 1500.0)
+        self.assertAlmostEqual(le["carryforward"], 13500.0)
+
+    # F7: a standard 8-digit OCC "thousandths" strike parses to the real strike; Fidelity short style holds.
+    def test_f7_occ_strike_thousandths(self):
+        def po(sym):
+            return tt.parse_option(dict(symbol=sym, description="Jan-19-2024", quantity=1.0,
+                                        current_value=100.0, cost_basis_total=50.0, account="Ind"))
+        self.assertAlmostEqual(po("-AAPL240119C00150000")["strike"], 150.0)   # 8-digit OCC -> 150.00
+        self.assertAlmostEqual(po("-SOFI270115C30")["strike"], 30.0)          # Fidelity short style holds
+
+    # F9a: at-the-money (spot == strike) is labeled ATM, not OTM.
+    def test_f9a_moneyness_atm(self):
+        self.assertEqual(tt._moneyness("call", 100.0, 100.0), "ATM")
+        self.assertEqual(tt._moneyness("put", 100.0, 100.0), "ATM")
+
+    # F10: dividend-income aggregation from the already-parsed history CSV.
+    def test_f10_dividend_income(self):
+        hist = [
+            dict(date=dt.date(2026, 3, 1), account="Ind", action="DIVIDEND RECEIVED",
+                 action_kind="DIVIDEND", symbol="AAA", amount=50.0),
+            dict(date=dt.date(2026, 6, 1), account="Ind", action="DIVIDEND RECEIVED",
+                 action_kind="DIVIDEND", symbol="BBB", amount=25.0),
+            dict(date=dt.date(2026, 6, 1), account="Ind", action="YOU BOUGHT",
+                 action_kind="BUY", symbol="AAA", amount=-100.0),
+        ]
+        out = tt.dividend_income(hist)
+        self.assertAlmostEqual(out["total"], 75.0)
+
+
 if __name__ == "__main__":
     unittest.main()

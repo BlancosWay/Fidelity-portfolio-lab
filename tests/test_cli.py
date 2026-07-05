@@ -69,6 +69,23 @@ class FetchLotsCliTests(unittest.TestCase):
 
 
 class HarvestCliTests(unittest.TestCase):
+    def test_max_ordinary_offset_flag(self):
+        # A large ST loss with --max-ordinary-offset 1500 caps the benefit and the note text.
+        db = build_db([
+            _row("Individual - TOD Test", "BIG", 10, "Jan-05-2026",
+                 "$2,000.00", "$20,000.00", "$5,000.00", "-$15,000.00", "-75.00%"),
+        ])
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["--db", db, "harvest", "--as-of", "2026-07-01",
+                                "--max-ordinary-offset", "1500"])
+            text = out.getvalue()
+        finally:
+            os.unlink(db)
+        self.assertIn("1,500", text)              # capped-offset note reflects the flag
+        self.assertIn("480.00", text)             # benefit = 1500 * 0.32
+
     def test_output(self):
         db = build_db(SAMPLE_ROWS)
         try:

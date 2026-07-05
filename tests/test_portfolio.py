@@ -168,5 +168,57 @@ class HeaderContractTests(unittest.TestCase):
             portfolio.load(self._write(extra), db, AS_OF)
 
 
+class DeepDiveReproPortfolioTests(unittest.TestCase):
+    """F5 (load tolerates benign header drift) and F9c (query keyword inside a string literal)."""
+
+    def setUp(self):
+        self._tmp = []
+
+    def tearDown(self):
+        for p in self._tmp:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+    def _csv(self, header_cols, row_vals):
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        self._tmp.append(path)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(",".join(header_cols) + "\n")
+            fh.write(",".join('"' + str(v) + '"' for v in row_vals) + "\n")
+        return path
+
+    def _db(self):
+        fd, db = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        self._tmp.append(db)
+        return db
+
+    def test_f5_load_tolerates_extra_and_reordered_columns(self):
+        # Benign header drift must NOT brick the load: an extra trailing column AND reordered columns
+        # (values mapped by header name, not position).
+        row = {h: v for h, v in zip(portfolio.EXPECTED_HEADERS,
+                                    ["Ind", "AAPL", "", "Margin", "10", "Jan-05-2026", "", "",
+                                     "$100", "$1000", "$1100", "+$100", "+10%"])}
+        reordered = list(portfolio.EXPECTED_HEADERS)[2:] + list(portfolio.EXPECTED_HEADERS)[:2]
+        cols = reordered + ["Percent Of Account"]
+        vals = [row[h] for h in reordered] + ["5%"]
+        db = self._db()
+        n = portfolio.load(self._csv(cols, vals), db, AS_OF)
+        self.assertEqual(n, 1)
+        got = portfolio.fetch_lots(db)[0]
+        self.assertEqual(got["account"], "Ind")     # mapped by name despite the reorder
+        self.assertEqual(got["symbol"], "AAPL")
+
+    def test_f9c_query_allows_keyword_inside_string_literal(self):
+        # A disallowed keyword appearing only inside a quoted string literal is data, not a statement.
+        stmt = portfolio._validate_query("SELECT * FROM lots WHERE symbol='CREATE'")
+        self.assertIn("CREATE", stmt)
+        stmt2 = portfolio._validate_query("SELECT * FROM lots WHERE description LIKE '%replace%'")
+        self.assertIn("replace", stmt2)
+
+
 if __name__ == "__main__":
     unittest.main()

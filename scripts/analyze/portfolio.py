@@ -277,11 +277,13 @@ def _as_of(val):
     return dt.date.fromisoformat(val) if val else dt.date.today()
 
 
-def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0):
+def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offsetting_lt_gains=0.0,
+                max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
-    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains)
+    rows, s = tax_tools.harvest(lots, as_of, st_rate, lt_rate, offsetting_st_gains, offsetting_lt_gains,
+                                max_ordinary_offset)
     if not rows:
         print("No harvestable losses in taxable accounts.")
         return
@@ -294,8 +296,8 @@ def cmd_harvest(db_path, as_of, st_rate, lt_rate, offsetting_st_gains=0.0, offse
     print(f"  Short-Term: {s['st_lots']} lots, ${s['st_loss']:,.2f}")
     print(f"  Long-Term:  {s['lt_lots']} lots, ${s['lt_loss']:,.2f}")
     print(f"  Estimated current-year tax benefit: ~${s['est_benefit']:,.2f}  [estimate, not tax advice]")
-    print("  (harvested losses first offset realized gains of the same character, then up to $3,000 "
-          "of ordinary income per year; the rest carries forward)")
+    print(f"  (harvested losses first offset realized gains of the same character, then up to "
+          f"${max_ordinary_offset:,.0f} of ordinary income per year; the rest carries forward)")
     if s["carryforward_loss"] > 0:
         print(f"  Loss carried forward to future years: ${s['carryforward_loss']:,.2f}")
     flags = tax_tools.price_dispersion_flags(lots)
@@ -490,7 +492,7 @@ def cmd_gift(db_path, min_gain_pct, top, account, as_of, lt_rate):
     print("  [estimate, not tax advice -- FMV deduction depends on itemizing and AGI limits.]")
 
 
-def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
+def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling, max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
@@ -510,7 +512,7 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
     else:
         print("  (no non-cash positions)")
 
-    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate)
+    _, hs = tax_tools.harvest(lots, as_of, st_rate, lt_rate, max_ordinary_offset=max_ordinary_offset)
     print("\n-- Harvestable losses (taxable) --")
     print(f"  Short-Term: {hs['st_lots']} lots, ${hs['st_loss']:,.2f}; "
           f"Long-Term: {hs['lt_lots']} lots, ${hs['lt_loss']:,.2f}; est. benefit ~${hs['est_benefit']:,.2f}.")
@@ -520,7 +522,7 @@ def cmd_dashboard(db_path, as_of, st_rate, lt_rate, within, income, ceiling):
     print(f"  {rs['count']} lots ({rs['winners']} winners, {rs['losers']} losers); "
           f"est. tax saved by waiting ~${rs['total_tax_saved_by_waiting']:,.2f}.")
 
-    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate)
+    le = tax_tools.liquidation_estimate(lots, as_of, st_rate, lt_rate, max_ordinary_offset)
     print("\n-- If sold now (taxable liquidation estimate) --")
     print(f"  ST {le['st_gain']:+,.2f} + LT {le['lt_gain']:+,.2f} = net {le['total_gain']:+,.2f} "
           f"(ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST and LT netted).")
@@ -639,6 +641,8 @@ def main(argv=None):
                     help="realized short-term gains these losses can offset (default 0)")
     hp.add_argument("--offsetting-lt-gains", type=float, default=0.0,
                     help="realized long-term gains these losses can offset (default 0)")
+    hp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                    help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     rp = sub.add_parser("ripening", help="taxable short-term lots approaching long-term status")
     rp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     rp.add_argument("--within", type=int, help="only lots ripening within N days")
@@ -685,6 +689,8 @@ def main(argv=None):
     dp.add_argument("--within", type=int, default=60, help="ripening horizon in days (default 60)")
     dp.add_argument("--income", type=float, help="taxable income for the 0%% LTCG capacity section")
     dp.add_argument("--ceiling", type=float, help="0%% LTCG bracket top for the capacity section")
+    dp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                    help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     op = sub.add_parser("options", help="options exposure dashboard (premium, notional, moneyness)")
     op.add_argument("--account", help="restrict to accounts matching this text")
     op.add_argument("--as-of", help="YYYY-MM-DD (default today)")
@@ -714,7 +720,7 @@ def main(argv=None):
         print(f"({len(rows)} rows)")
     elif args.cmd == "harvest":
         cmd_harvest(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate,
-                    args.offsetting_st_gains, args.offsetting_lt_gains)
+                    args.offsetting_st_gains, args.offsetting_lt_gains, args.max_ordinary_offset)
     elif args.cmd == "ripening":
         cmd_ripening(args.db, _as_of(args.as_of), args.within, args.st_rate, args.lt_rate)
     elif args.cmd == "concentration":
@@ -731,7 +737,7 @@ def main(argv=None):
         cmd_gift(args.db, args.min_gain_pct, args.top, args.account, _as_of(args.as_of), args.lt_rate)
     elif args.cmd == "dashboard":
         cmd_dashboard(args.db, _as_of(args.as_of), args.st_rate, args.lt_rate, args.within,
-                      args.income, args.ceiling)
+                      args.income, args.ceiling, args.max_ordinary_offset)
     elif args.cmd == "options":
         cmd_options(args.db, _as_of(args.as_of), args.account, args.top)
     elif args.cmd == "expiration":
