@@ -470,7 +470,9 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     print(f"  REVIEW  (replacement buy in a 401(k)/403(b)/BrokerageLink/529 -> wash-sale treatment unsettled; prevailing view is it does NOT apply, confirm with a tax pro): {s['review']}")
     print(f"  CLEAN: {s['clean']}")
     print("  Disallowed $ (est) apportions the loss to the shares matched by replacement purchases "
-          "(only the matched shares' loss is disallowed; the rest stays allowed).")
+          "(only the matched shares' loss is disallowed; the rest stays allowed). Each row is an "
+          "INDEPENDENT per-lot what-if -- a shared replacement can wash a given share only once, so the "
+          "Disallowed column is not additive across rows.")
     print("  * = INFERRED acquisition (option assignment/exercise or an inbound transfer/exchange); its"
           " status is capped at REVIEW -- verify whether it re-acquired a substantially identical position.")
     print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")

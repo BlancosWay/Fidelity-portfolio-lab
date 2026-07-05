@@ -288,6 +288,18 @@ class SelectLotsTests(unittest.TestCase):
         self.assertAlmostEqual(s["realized_gain"], -10.0)
         self.assertAlmostEqual(s["delta_vs_fifo"], -20.0)   # -10 vs FIFO +10
 
+    def test_min_tax_values_losses_at_ordinary_rate(self):
+        # An LT loss offsets ordinary income at the ST rate, so min-tax prefers the bigger LT loss over a
+        # smaller ST loss when selling one share (consistent with the netted est_tax).
+        lots = [
+            lot(symbol="Q", quantity=1, current_value=10.0, cost_basis_total=11.0, gain_loss=-1.0,
+                avg_cost_basis=11.0, date_acquired="2026-06-01", term="Short-Term"),   # ST loss/sh -1
+            lot(symbol="Q", quantity=1, current_value=10.0, cost_basis_total=12.0, gain_loss=-2.0,
+                avg_cost_basis=12.0, date_acquired="2020-01-01", term="Long-Term"),    # LT loss/sh -2
+        ]
+        picks, _ = tt.select_lots(lots, "Q", 1, "min-tax", as_of=self.AS_OF)
+        self.assertEqual(picks[0]["term"], "Long-Term")   # -2 * st_rate beats -1 * st_rate
+
     def test_fractional_and_insufficient(self):
         _, s = tt.select_lots(self._lots(), "XYZ", 100, "fifo", as_of=self.AS_OF)
         self.assertTrue(s["insufficient"])
@@ -1211,6 +1223,29 @@ class DeepDiveReproTests(unittest.TestCase):
         c = tt.washsale([loss], [rec], dt.date(2026, 6, 15), 30)["candidates"][0]
         self.assertAlmostEqual(c["affected_shares"], 1.0)     # only 1 of 100 shares replaced
         self.assertAlmostEqual(c["disallowed_loss"], -10.0)   # ~1/100 of the -1000 loss
+
+    def test_f3_option_replacement_uses_share_multiplier(self):
+        # A 100-share stock loss + a 1-contract bought call on the same underlying: 1 contract controls
+        # 100 shares, so the whole 100-share loss is matched (not 1 "share").
+        loss = lot(symbol="AAA", quantity=100.0, gain_loss=-1000.0, date_acquired="2026-06-01",
+                   current_value=5000.0, cost_basis_total=6000.0)
+        call = hrec(dt.date(2026, 6, 10), "Individual - TOD Test", "-AAA270115C30",
+                    kind="OPTION_OPEN", qty=1.0, action="YOU BOUGHT OPENING CALL (AAA)")
+        c = tt.washsale([loss], [call], dt.date(2026, 6, 15), 30, same_underlying=True)["candidates"][0]
+        self.assertAlmostEqual(c["affected_shares"], 100.0)
+        self.assertAlmostEqual(c["disallowed_loss"], -1000.0)
+
+    def test_f3_rows_are_independent_per_lot_whatifs(self):
+        # Two loss lots + one 50-share replacement: each row independently shows up to 50 affected shares
+        # (the same buy can wash either lot; the Disallowed column is not additive across rows).
+        common = dict(symbol="AAA", quantity=100.0, gain_loss=-1000.0, date_acquired="2026-06-01",
+                      current_value=5000.0, cost_basis_total=6000.0)
+        loss1 = lot(account="Individual - TOD Test", **common)
+        loss2 = lot(account="Joint Brokerage Test", **common)
+        buy = hrec(dt.date(2026, 6, 10), "Individual - TOD Test", "AAA", kind="BUY", qty=50.0)
+        cands = tt.washsale([loss1, loss2], [buy], dt.date(2026, 6, 15), 30)["candidates"]
+        self.assertAlmostEqual(cands[0]["affected_shares"], 50.0)
+        self.assertAlmostEqual(cands[1]["affected_shares"], 50.0)
 
     # F4: wash_category "529" needs a word boundary so it agrees with is_taxable.
     def test_f4_wash_category_529_boundary(self):

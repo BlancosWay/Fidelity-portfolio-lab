@@ -414,8 +414,12 @@ def _order_sale_lots(prepped, strategy, st_rate, lt_rate):
         return sorted(prepped, key=lambda l: l["per_share_gain"])
 
     def impact(l):  # min-tax: ascending per-share tax impact (losses first, small ST gain < large LT gain)
-        rate = st_rate if l["term"] == "Short-Term" else lt_rate
-        return l["per_share_gain"] * rate
+        g = l["per_share_gain"]
+        # A realized loss benefits by offsetting income (up to the annual cap) at the ordinary/ST rate,
+        # so value a loss at st_rate; a gain is taxed at its own term rate. This keeps the min-tax
+        # ordering consistent with the netted est_tax reported via _net_capital_tax.
+        rate = st_rate if g < 0 else (st_rate if l["term"] == "Short-Term" else lt_rate)
+        return g * rate
     return sorted(prepped, key=impact)
 
 
@@ -532,6 +536,7 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
     cand_rows = []
     for lot in loss_candidates:
         sk = security_key(lot.get("symbol"))
+        loss_is_option = sk["kind"] == "option"
         triggers = []
         for b in buys:
             if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying):
@@ -540,16 +545,20 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
                 # An inferred (non-BUY) re-acquisition is never asserted as a definite wash sale: cap it
                 # at REVIEW regardless of account category. Definite BUY/REINVEST/buy-to-open keep the map.
                 severity = "REVIEW" if inferred else WASH_SEVERITY[category]
+                # An option replacement controls 100 shares/contract; express it in underlying-share
+                # equivalents when apportioning a STOCK loss (same-underlying), else keep native units.
+                qty_shares = b["abs_qty"] * (100 if b.get("kind") == "option" and not loss_is_option else 1)
                 triggers.append(
                     {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
-                     "qty": b["abs_qty"], "category": category, "severity": severity, "inferred": inferred})
+                     "qty": b["abs_qty"], "qty_shares": qty_shares, "category": category,
+                     "severity": severity, "inferred": inferred})
         if not triggers:
             status = "CLEAN"
         else:
             status = max((t["severity"] for t in triggers), key=lambda s: _STATUS_RANK[s])
-        # Quantity-aware disallowed loss: only the loss on shares matched by replacement purchases is
-        # disallowed. affected_shares = min(total matched replacement qty, loss-lot qty); the disallowed
-        # amount is that share fraction of the loss (the rest of the loss remains allowed).
+        # Quantity-aware disallowed loss (a per-lot what-if): only the loss on shares matched by
+        # replacement purchases is disallowed. affected_shares = min(total matched replacement shares,
+        # loss-lot qty); the disallowed amount is that share fraction of the loss (the rest stays allowed).
         try:
             loss_qty = abs(float(lot.get("quantity")))
         except (TypeError, ValueError):
@@ -558,7 +567,7 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
             loss_amt = float(lot.get("gain_loss"))
         except (TypeError, ValueError):
             loss_amt = 0.0
-        matched_qty = sum(t["qty"] for t in triggers)
+        matched_qty = sum(t["qty_shares"] for t in triggers)
         affected_shares = min(matched_qty, loss_qty) if loss_qty > 0 else 0.0
         disallowed_loss = (loss_amt * affected_shares / loss_qty) if loss_qty > 0 else 0.0
         cand_rows.append({"symbol": lot.get("symbol"), "account": lot.get("account"),

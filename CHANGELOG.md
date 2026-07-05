@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loss lot previously flagged the *entire* loss; the IRS only disallows the loss on the shares matched by
   the replacement. Each candidate now reports `affected_shares` and a quantity-apportioned
   `disallowed_loss` (`loss × matched_shares ÷ loss_shares`), and `washsale` shows a "Disallowed $ (est)"
-  column so the remaining loss stays visibly allowed.
+  column so the remaining loss stays visibly allowed. An option replacement matched to a stock loss
+  (`--same-underlying`) is counted in underlying-share equivalents (100 shares/contract), and each row
+  is an independent per-lot what-if (the Disallowed column is not additive across rows).
 - **Wash-sale now surfaces non-BUY re-acquisitions (option assignment/exercise, inbound transfers).**
   A replacement position re-acquired via an option assignment/exercise or an inbound transfer/exchange/
   journal was classified `OTHER` and silently rated CLEAN. These are now treated as **inferred**
@@ -59,7 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mixed-character sale printed a wrong (sometimes ~7×-overstated or fake-negative) number that
   contradicted the netting used by `harvest`/`liquidation`/`dashboard`. `select_lots`/`sell` now route
   `est_tax` through `_net_capital_tax` (ST↔LT netting, `--max-ordinary-offset` cap) and surface the
-  deductible-now vs carryforward split. Pure-gain sales are unchanged. Estimates only, not tax advice.
+  deductible-now vs carryforward split. The `min-tax` lot ordering now values a loss at the ordinary
+  (ST) rate too, so its choice stays consistent with the netted estimate. Pure-gain sales are unchanged.
+  Estimates only, not tax advice.
 - **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
   or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable
   loss, as taxable in the "if sold now" liquidation estimate, in per-account unrealized gain/loss, in
