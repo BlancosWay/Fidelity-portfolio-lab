@@ -110,7 +110,8 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   **CAUTION** for another taxable account; it also prints a forward "don't repurchase within N days"
   reminder and a ±`--window` audit of past sells. A non-BUY re-acquisition (option assignment/exercise
   or an inbound transfer/exchange/journal) is treated as an **inferred** replacement (marked `*`) and
-  capped at **REVIEW**. Limitation: it only sees the history window you export, so `CLEAN` is not a guarantee.
+  capped at **REVIEW**. The disallowed loss is quantity-apportioned (only the loss on shares matched by
+  the replacement is disallowed). Limitation: it only sees the history window you export, so `CLEAN` is not a guarantee.
 - **`capacity`** — bracket-aware realized-gain planner over taxable **long-term gain** lots. Fills
   either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income ceiling you
   supply, selecting the biggest-gain lots first (final lot taken partially). `--within-rate` (default

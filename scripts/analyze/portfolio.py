@@ -407,8 +407,9 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     c, s = res["candidates"], res["summary"]
     if c:
         _print_table(
-            ["Account", "Symbol", "Loss $", "Status", "Triggering purchases (any account)"],
-            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "", r["status"],
+            ["Account", "Symbol", "Loss $", "Disallowed $ (est)", "Status", "Triggering purchases (any account)"],
+            [(r["account"], r["symbol"], round(r["loss"], 2) if r["loss"] is not None else "",
+              round(r["disallowed_loss"], 2) if r["status"] != "CLEAN" else "", r["status"],
               "; ".join(f"{t['action']}{'*' if t.get('inferred') else ''} {t['qty']:g} in {t['account']} {t['date']}"
                         for t in r["triggers"]) or "-")
              for r in c],
@@ -420,6 +421,8 @@ def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
     print(f"  CAUTION (replacement buy in a taxable account): {s['caution']}")
     print(f"  REVIEW  (replacement buy in a 401(k)/403(b)/BrokerageLink/529 -> wash-sale treatment unsettled; prevailing view is it does NOT apply, confirm with a tax pro): {s['review']}")
     print(f"  CLEAN: {s['clean']}")
+    print("  Disallowed $ (est) apportions the loss to the shares matched by replacement purchases "
+          "(only the matched shares' loss is disallowed; the rest stays allowed).")
     print("  * = INFERRED acquisition (option assignment/exercise or an inbound transfer/exchange); its"
           " status is capped at REVIEW -- verify whether it re-acquired a substantially identical position.")
     print(f"  Also DO NOT repurchase a harvested security within {window} days AFTER selling it.")

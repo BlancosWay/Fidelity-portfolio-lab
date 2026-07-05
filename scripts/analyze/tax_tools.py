@@ -519,7 +519,9 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
         alone, so it is labeled "loss unknown" rather than asserted as a wash sale.
 
     ``history`` records are the dicts returned by ``history.load_history``. Identity uses security_key.
-    Returns ``{"candidates": [...], "realized": [...], "summary": {...}}``."""
+    Each candidate also carries ``affected_shares`` (shares matched by replacement purchases) and
+    ``disallowed_loss`` (the quantity-apportioned share of the loss that is disallowed; the rest of the
+    loss stays allowed). Returns ``{"candidates": [...], "realized": [...], "summary": {...}}``."""
     buys = [h for h in history if _is_acquisition(h)]
     sells = [h for h in history if h["action_kind"] == "SELL"]
 
@@ -545,8 +547,23 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
             status = "CLEAN"
         else:
             status = max((t["severity"] for t in triggers), key=lambda s: _STATUS_RANK[s])
+        # Quantity-aware disallowed loss: only the loss on shares matched by replacement purchases is
+        # disallowed. affected_shares = min(total matched replacement qty, loss-lot qty); the disallowed
+        # amount is that share fraction of the loss (the rest of the loss remains allowed).
+        try:
+            loss_qty = abs(float(lot.get("quantity")))
+        except (TypeError, ValueError):
+            loss_qty = 0.0
+        try:
+            loss_amt = float(lot.get("gain_loss"))
+        except (TypeError, ValueError):
+            loss_amt = 0.0
+        matched_qty = sum(t["qty"] for t in triggers)
+        affected_shares = min(matched_qty, loss_qty) if loss_qty > 0 else 0.0
+        disallowed_loss = (loss_amt * affected_shares / loss_qty) if loss_qty > 0 else 0.0
         cand_rows.append({"symbol": lot.get("symbol"), "account": lot.get("account"),
-                          "loss": lot.get("gain_loss"), "status": status, "triggers": triggers})
+                          "loss": lot.get("gain_loss"), "status": status, "triggers": triggers,
+                          "affected_shares": affected_shares, "disallowed_loss": disallowed_loss})
 
     realized = []
     for sale in sells:

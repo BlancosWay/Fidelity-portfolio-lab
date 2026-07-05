@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **Wash-sale disallowed loss is now quantity-aware.** A small replacement purchase against a larger
+  loss lot previously flagged the *entire* loss; the IRS only disallows the loss on the shares matched by
+  the replacement. Each candidate now reports `affected_shares` and a quantity-apportioned
+  `disallowed_loss` (`loss × matched_shares ÷ loss_shares`), and `washsale` shows a "Disallowed $ (est)"
+  column so the remaining loss stays visibly allowed.
 - **Wash-sale now surfaces non-BUY re-acquisitions (option assignment/exercise, inbound transfers).**
   A replacement position re-acquired via an option assignment/exercise or an inbound transfer/exchange/
   journal was classified `OTHER` and silently rated CLEAN. These are now treated as **inferred**

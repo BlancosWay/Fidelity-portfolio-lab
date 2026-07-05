@@ -261,6 +261,25 @@ def build_history(rows):
 
 
 class WashSaleCliTests(unittest.TestCase):
+    def test_disallowed_loss_is_quantity_apportioned(self):
+        # 100-share loss but only a 1-share taxable replacement -> only ~1/100 of the loss is disallowed.
+        db = build_db([
+            _row("Individual - TOD Test", "AAA", 100, "Jun-15-2026",
+                 "$11.00", "$1,100.00", "$1,000.00", "-$100.00", "-9.09%"),
+        ])
+        hp = build_history([
+            '06-20-2026,Joint Brokerage Test,444,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,1,0,"","","",-10,06-22-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_washsale, db, hp, AS_OF, 30, False)
+        finally:
+            os.unlink(db)
+            os.unlink(hp)
+        self.assertIn("CAUTION", text)        # taxable replacement
+        self.assertIn("Disallowed", text)     # the apportioned column is shown
+        self.assertIn("-1.0", text)           # disallowed ~ -100 * (1/100) = -1.00 (partial)
+        self.assertIn("-100.0", text)         # the full loss is still shown (rest stays allowed)
+
     def test_blocked_output(self):
         db = build_db([
             _row("Individual - TOD Test", "AAA", 10, "Jun-15-2026", "$11.00", "$110.00", "$100.00", "-$10.00", "-9.09%"),

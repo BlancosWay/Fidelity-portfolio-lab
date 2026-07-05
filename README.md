@@ -84,7 +84,9 @@ Real data:
 > does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
 > within N days" reminder and a ±`--window` audit of past sells. A non-BUY re-acquisition (option
 > assignment/exercise or an inbound transfer/exchange/journal, marked `*`) is treated as an **inferred**
-> replacement and capped at **REVIEW** (never asserted as a definite wash sale).
+> replacement and capped at **REVIEW** (never asserted as a definite wash sale). The disallowed loss is
+> **quantity-apportioned** — only the loss on shares matched by the replacement is disallowed (shown as
+> "Disallowed $ (est)").
 >
 > `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
 > to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income
