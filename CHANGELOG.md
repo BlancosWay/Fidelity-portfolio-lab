@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **`sell` now nets short- vs long-term and caps the loss benefit like every other tax command.** Its
+  estimated tax previously applied the ST and LT rates to each bucket independently, so a loss-heavy or
+  mixed-character sale printed a wrong (sometimes ~7×-overstated or fake-negative) number that
+  contradicted the netting used by `harvest`/`liquidation`/`dashboard`. `select_lots`/`sell` now route
+  `est_tax` through `_net_capital_tax` (ST↔LT netting, `--max-ordinary-offset` cap) and surface the
+  deductible-now vs carryforward split. Pure-gain sales are unchanged. Estimates only, not tax advice.
 - **Closed lots (quantity ≤ 0) are no longer treated as live positions.** A zero-quantity (fully sold)
   or negative/short lot that still carried a `gain_loss` in the export was counted as a harvestable
   loss, as taxable in the "if sold now" liquidation estimate, in per-account unrealized gain/loss, in

@@ -360,11 +360,13 @@ def cmd_concentration(db_path, top, threshold):
     _exclusion_notes()
 
 
-def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate):
+def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate,
+             max_ordinary_offset=3000.0):
     lots = read_lots(db_path)
     if lots is None:
         return
-    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate)
+    picks, s = tax_tools.select_lots(lots, symbol, shares, strategy, account, as_of, st_rate, lt_rate,
+                                     max_ordinary_offset)
     if not picks:
         print(f"No sellable taxable lots found for {s['symbol']}"
               + (f" in accounts matching '{account}'." if account else " (tax-advantaged lots are excluded)."))
@@ -387,7 +389,13 @@ def cmd_sell(db_path, symbol, shares, account, strategy, as_of, st_rate, lt_rate
               f"(${disp['min']:,.2f}..${disp['max']:,.2f}); the export may be corrupted -- verify before acting.")
     print(f"  Realized: ST ${s['st_gain']:,.2f} + LT ${s['lt_gain']:,.2f} = ${s['realized_gain']:,.2f}")
     print(f"  vs FIFO ${s['fifo_realized_gain']:,.2f}  (delta ${s['delta_vs_fifo']:,.2f}; negative = less gain realized)")
-    print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}): ~${s['est_tax']:,.2f}  [estimate, not tax advice]")
+    if s["net_loss"] > 0:
+        print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST/LT netted): ~${s['est_tax']:,.2f}  "
+              f"(net capital LOSS ${s['net_loss']:,.2f}: ${s['deductible_loss']:,.2f} offsets ordinary income now, "
+              f"${s['carryforward']:,.2f} carries forward)  [estimate, not tax advice]")
+    else:
+        print(f"  Est. tax (ST@{st_rate:.0%}, LT@{lt_rate:.0%}, ST/LT netted): ~${s['est_tax']:,.2f}  "
+              f"[estimate, not tax advice]")
 
 
 def cmd_washsale(db_path, history_path, as_of, window, same_underlying):
@@ -659,6 +667,8 @@ def main(argv=None):
     slp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     slp.add_argument("--st-rate", type=float, default=0.32, help="short-term/ordinary rate for the estimate")
     slp.add_argument("--lt-rate", type=float, default=0.15, help="long-term rate for the estimate")
+    slp.add_argument("--max-ordinary-offset", type=float, default=3000.0,
+                     help="max net loss deductible against ordinary income per year (default 3000; MFS 1500)")
     wp = sub.add_parser("washsale", help="cross-account wash-sale guardrail (needs a Fidelity history CSV)")
     wp.add_argument("history", help="path to an Accounts_History.csv")
     wp.add_argument("--as-of", help="YYYY-MM-DD (default today)")
@@ -727,7 +737,7 @@ def main(argv=None):
         cmd_concentration(args.db, args.top, args.threshold)
     elif args.cmd == "sell":
         cmd_sell(args.db, args.symbol, args.shares, args.account, args.strategy,
-                 _as_of(args.as_of), args.st_rate, args.lt_rate)
+                 _as_of(args.as_of), args.st_rate, args.lt_rate, args.max_ordinary_offset)
     elif args.cmd == "washsale":
         cmd_washsale(args.db, args.history, _as_of(args.as_of), args.window, args.same_underlying)
     elif args.cmd == "capacity":

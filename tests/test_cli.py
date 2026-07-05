@@ -190,6 +190,20 @@ SELL_ROWS = [
 
 
 class SellCliTests(unittest.TestCase):
+    def test_net_loss_sale_shows_netted_capped_tax(self):
+        # Selling a large LT-loss lot: est_tax is the $3k-capped benefit + carryforward, not lt_rate*loss.
+        db = build_db([
+            _row("Individual - TOD Test", "BIGL", 10, "Jan-05-2020",
+                 "$5,100.00", "$51,000.00", "$1,000.00", "-$50,000.00", "-98.04%"),
+        ])
+        try:
+            text = run(portfolio.cmd_sell, db, "BIGL", 10, None, "min-tax", AS_OF, 0.32, 0.15)
+        finally:
+            os.unlink(db)
+        self.assertIn("carries forward", text)
+        self.assertIn("960.00", text)        # capped benefit 3000 * 0.32
+        self.assertNotIn("7,500", text)       # NOT the naive lt_rate * 50000 loss
+
     def test_output(self):
         db = build_db(SELL_ROWS)
         try:

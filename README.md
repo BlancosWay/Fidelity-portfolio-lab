@@ -56,7 +56,7 @@ Real data:
 | `harvest [--as-of D] [--st-rate R] [--lt-rate R] [--offsetting-st-gains X] [--offsetting-lt-gains X] [--max-ordinary-offset X]` | Tax-loss harvest candidates (taxable, short-term first); benefit models ST/LT netting + the ordinary-loss cap (`--max-ordinary-offset`, default $3k; MFS $1.5k). |
 | `ripening [--within N] [--as-of D] [--st-rate R] [--lt-rate R]` | Taxable short-term lots and the date each becomes long-term. |
 | `concentration [--top N] [--threshold P]` | Cross-account concentration by symbol + Herfindahl index (options and non-positive-value symbols excluded from the equity ranking). |
-| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded. |
+| `sell <SYM> <SHARES> [--strategy S] [--account A] [--as-of D] [--st-rate R] [--lt-rate R] [--max-ordinary-offset X]` | Pick specific **taxable** lots to sell (`hifo`/`fifo`/`loss-first`/`min-tax`); tax-advantaged lots excluded; est. tax nets ST/LT + caps the loss benefit. |
 | `washsale <history.csv> [--as-of D] [--window N] [--same-underlying]` | Flag a taxable loss whose security was bought near the sale in any account. |
 | `capacity [--income X] [--ceiling X] [--ceiling-label L] [--target-gain X] [--within-rate R] [--account A] [--as-of D] [--lt-rate R]` | Which taxable long-term gain lots to realize to fill a 0% LTCG (or other) headroom, or a `--target-gain`. |
 | `gift [--min-gain-pct P] [--top N] [--account A] [--as-of D] [--lt-rate R]` | Rank taxable long-term appreciated lots as charitable-donation candidates. |

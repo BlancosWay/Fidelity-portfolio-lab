@@ -99,7 +99,9 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   specific-ID instruction plus the delta vs FIFO (`--account` restricts to matching accounts).
   Tax-advantaged lots (IRA/Roth/HSA/BrokerageLink/529) are excluded (their gains are tax-free), and a
   pick spanning accounts prints a per-account NOTE (specific-ID sales are one order per account). Warns
-  when a symbol's per-share prices are inconsistent across lots (a possible export corruption).
+  when a symbol's per-share prices are inconsistent across lots (a possible export corruption). The
+  estimated tax nets ST vs LT and caps a net-loss benefit (`--max-ordinary-offset`, default 3000),
+  surfacing the deductible-now vs carryforward split.
 - **`washsale HISTORY.csv`** — needs a Fidelity **Accounts History** CSV export. For each current
   taxable loss it flags a same-security purchase in the **prior `--window` days (through `--as-of`)**
   in *any* account, graded by the buying account: **BLOCKED** for an IRA/Roth/HSA (loss permanently

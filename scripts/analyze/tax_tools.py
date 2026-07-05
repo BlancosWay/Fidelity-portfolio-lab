@@ -434,14 +434,16 @@ def _consume_lots(ordered, shares):
 
 
 def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=None,
-                st_rate=0.32, lt_rate=0.15):
+                st_rate=0.32, lt_rate=0.15, max_ordinary_offset=3000.0):
     """Choose which specific lots to sell to fulfill ``shares`` of ``symbol`` under a strategy:
     hifo (highest cost first), fifo (oldest first), loss-first, or min-tax (ascending per-share tax
     impact, default). Only **taxable** accounts are considered (tax-advantaged lots are excluded --
     their gains are tax-free and a specific-ID sale there isn't a tax-optimized taxable sale). Returns
     ``(picks, summary)`` with realized gain split ST/LT, the delta vs FIFO, and ``accounts`` /
-    ``multi_account`` (a sale spanning accounts is more than one broker order). Proceeds are estimated
-    from current value (a per-share price estimate, not tax advice)."""
+    ``multi_account`` (a sale spanning accounts is more than one broker order). ``est_tax`` nets the
+    realized ST vs LT via ``_net_capital_tax`` (a net loss benefit is capped at ``max_ordinary_offset``,
+    with the residual as ``carryforward``), consistent with harvest/liquidation/dashboard. Proceeds are
+    estimated from current value (a per-share price estimate, not tax advice)."""
     as_of = as_of or dt.date.today()
     prepped = _prep_sale_lots(lots, symbol, account, as_of)
     picks, remaining = _consume_lots(_order_sale_lots(prepped, strategy, st_rate, lt_rate), shares)
@@ -451,6 +453,7 @@ def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=No
     lt_gain = sum(p["realized_gain"] for p in picks if p["term"] == "Long-Term")
     fifo_total = sum(p["realized_gain"] for p in fifo_picks)
     accounts = sorted({p["account"] for p in picks}, key=lambda a: a or "")
+    nct = _net_capital_tax(st_gain, lt_gain, st_rate, lt_rate, max_ordinary_offset)
     summary = {
         "strategy": strategy,
         "symbol": (symbol or "").strip().upper(),
@@ -463,7 +466,11 @@ def select_lots(lots, symbol, shares, strategy="min-tax", account=None, as_of=No
         "lt_gain": lt_gain,
         "fifo_realized_gain": fifo_total,
         "delta_vs_fifo": total - fifo_total,
-        "est_tax": st_gain * st_rate + lt_gain * lt_rate,
+        "est_tax": nct["est_tax"],
+        "net_gain": nct["net_gain"],
+        "net_loss": nct["net_loss"],
+        "deductible_loss": nct["deductible_loss"],
+        "carryforward": nct["carryforward"],
         "accounts": accounts,
         "multi_account": len(accounts) > 1,
     }
