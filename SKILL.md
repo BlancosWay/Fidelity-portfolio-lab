@@ -142,6 +142,10 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   assignment cash. `--within N` limits to options expiring within N days. Already-expired contracts are
   still listed (with a separate count) but excluded from the live/soon/assignment totals. **Not
   investment advice.**
+- **`dividends HISTORY.csv`** — sums cash dividend income from a Fidelity **Accounts History** CSV
+  (the same export `washsale` uses): total plus per-symbol and per-account breakdowns, with an optional
+  `--year Y` calendar-year filter. Qualified vs ordinary dividends are not distinguished (the export
+  lacks that flag). **Informational, not tax advice.**
 
 ## Definitions
 - **long** = held **> 1 year** (long-term); **short** = held **<= 1 year** (short-term). Computed

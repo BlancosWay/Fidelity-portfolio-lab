@@ -1203,3 +1203,38 @@ def expiration_calendar(lots, as_of, within=None, account=None):
         "expired": sum(1 for r in rows if r["days"] < 0),
     }
     return rows, summary
+
+
+def dividend_income(history, year=None):
+    """Aggregate cash dividend income from a Fidelity Accounts-History export (informational, NOT tax
+    advice). Sums the ``amount`` of ``DIVIDEND`` actions, optionally only those in calendar ``year``.
+
+    Returns ``{total, by_symbol, by_account, n}`` where the two breakdowns are lists of
+    ``{symbol|account, amount}`` (by_symbol sorted by amount desc, by_account by name). Qualified vs
+    ordinary dividends are NOT distinguished (a Fidelity history export does not carry that flag)."""
+    total = 0.0
+    by_symbol, by_account = {}, {}
+    n = 0
+    for rec in history:
+        if rec.get("action_kind") != "DIVIDEND":
+            continue
+        d = rec.get("date")
+        if year is not None and (d is None or d.year != year):
+            continue
+        try:
+            amt = float(rec.get("amount"))
+        except (TypeError, ValueError):
+            continue
+        total += amt
+        sym = (rec.get("symbol") or "").strip() or "(cash)"
+        acct = (rec.get("account") or "").strip()
+        by_symbol[sym] = by_symbol.get(sym, 0.0) + amt
+        by_account[acct] = by_account.get(acct, 0.0) + amt
+        n += 1
+    return {
+        "total": total,
+        "by_symbol": [{"symbol": k, "amount": round(v, 2)}
+                      for k, v in sorted(by_symbol.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "by_account": [{"account": k, "amount": round(v, 2)} for k, v in sorted(by_account.items())],
+        "n": n,
+    }

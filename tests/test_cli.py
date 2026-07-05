@@ -722,5 +722,40 @@ class Bug5ReportTests(unittest.TestCase):
         self.assertIn("10.0 long", late)     # totals reflect the recomputed long term
 
 
+class DividendsCliTests(unittest.TestCase):
+    def test_dividends_total_and_year_filter(self):
+        hp = build_history([
+            '03-01-2026,Individual - TOD Test,111,DIVIDEND RECEIVED (AAA),AAA,AAA CO,Cash,0,,USD,,,0,"","","",50.00,03-01-2026',
+            '06-01-2025,Individual - TOD Test,111,DIVIDEND RECEIVED (BBB),BBB,BBB CO,Cash,0,,USD,,,0,"","","",25.00,06-01-2025',
+            '06-01-2026,Individual - TOD Test,111,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-03-2026',
+        ])
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["dividends", hp])
+            all_text = out.getvalue()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                portfolio.main(["dividends", hp, "--year", "2026"])
+            y2026 = out.getvalue()
+        finally:
+            os.unlink(hp)
+        self.assertIn("75.00", all_text)      # 50 + 25 across all years; the BUY (-100) is excluded
+        self.assertIn("AAA", all_text)
+        self.assertIn("not tax advice", all_text)
+        self.assertIn("50.00", y2026)         # only 2026's $50
+        self.assertNotIn("75.00", y2026)      # 2025's $25 excluded by --year
+
+    def test_no_dividends_message(self):
+        hp = build_history([
+            '06-01-2026,Individual - TOD Test,111,YOU BOUGHT AAA CO (AAA) (Cash),AAA,AAA CO,Cash,0,,USD,10.00,10,0,"","","",-100,06-03-2026',
+        ])
+        try:
+            text = run(portfolio.cmd_dividends, hp, None)
+        finally:
+            os.unlink(hp)
+        self.assertIn("No dividend income", text)
+
+
 if __name__ == "__main__":
     unittest.main()

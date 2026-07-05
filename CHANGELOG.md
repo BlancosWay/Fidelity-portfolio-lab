@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **`dividends <history.csv> [--year Y]`** aggregates cash dividend income from a Fidelity Accounts
+  History export — total plus per-symbol and per-account breakdowns, optionally filtered to a calendar
+  year. Informational, not tax advice; qualified vs ordinary dividends are not distinguished (the export
+  does not carry that flag).
 - **`--max-ordinary-offset` on `harvest` and `dashboard`** (default `3000`) parameterizes the annual
   net-capital-loss deduction against ordinary income, so a married-filing-separately filer can set
   `1500`. `_net_capital_tax`, `harvest`, and `liquidation_estimate` thread the cap through; the default

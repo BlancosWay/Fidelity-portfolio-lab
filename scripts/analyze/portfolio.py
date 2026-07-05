@@ -680,6 +680,20 @@ def cmd_expiration(db_path, as_of, within, account, top):
           "[informational, not investment advice]")
 
 
+def cmd_dividends(history_path, year):
+    out = tax_tools.dividend_income(history.load_history(history_path), year)
+    label = f" in {year}" if year else ""
+    if out["n"] == 0:
+        print(f"No dividend income found{label}.")
+        return
+    _print_table(["Symbol", "Dividends $"],
+                 [(r["symbol"], r["amount"]) for r in out["by_symbol"]])
+    print(f"\nTotal dividend income{label}: ${out['total']:,.2f} across {out['n']} payment(s).")
+    _print_table(["Account", "Dividends $"],
+                 [(r["account"], r["amount"]) for r in out["by_account"]])
+    print("  [informational, not tax advice; qualified vs ordinary dividends are not distinguished]")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="portfolio", description="Analyze Fidelity lot exports (read-only).")
     p.add_argument("--db", default=DEFAULT_DB, help=f"SQLite DB path (default: {DEFAULT_DB})")
@@ -764,6 +778,9 @@ def main(argv=None):
     ep.add_argument("--account", help="restrict to accounts matching this text")
     ep.add_argument("--as-of", help="YYYY-MM-DD (default today)")
     ep.add_argument("--top", type=int, default=30, help="rows to show (default 30)")
+    dvp = sub.add_parser("dividends", help="dividend income from an Accounts History CSV")
+    dvp.add_argument("history", help="path to an Accounts_History.csv")
+    dvp.add_argument("--year", type=int, help="only dividends in this calendar year (default: all)")
     args = p.parse_args(argv)
 
     if args.cmd == "load":
@@ -806,6 +823,8 @@ def main(argv=None):
         cmd_options(args.db, _as_of(args.as_of), args.account, args.top)
     elif args.cmd == "expiration":
         cmd_expiration(args.db, _as_of(args.as_of), args.within, args.account, args.top)
+    elif args.cmd == "dividends":
+        cmd_dividends(args.history, args.year)
     return 0
 
 
