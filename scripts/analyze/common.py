@@ -31,12 +31,18 @@ def parse_money(s):
 
 
 def parse_qty(s):
+    """Parse a quantity to float; a parenthesized value is negative (e.g. '(100)' -> -100.0), mirroring
+    the browser exporter's num(). Returns 0.0 for blank/unparseable input."""
     if s is None:
         return 0.0
+    s = s.strip()
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.replace("(", "").replace(")", "").replace(",", "").strip()
     try:
-        return float(s.replace(",", "").strip())
+        v = float(s)
     except ValueError:
         return 0.0
+    return -v if neg else v
 
 
 def parse_date(s):

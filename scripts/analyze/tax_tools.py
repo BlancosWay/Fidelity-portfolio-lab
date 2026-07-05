@@ -1029,6 +1029,8 @@ def underlying_spots(lots):
 def _moneyness(otype, strike, spot):
     if spot is None:
         return "n/a"
+    if spot == strike:
+        return "ATM"
     if otype == "call":
         return "ITM" if spot > strike else "OTM"
     return "ITM" if spot < strike else "OTM"

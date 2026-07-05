@@ -169,17 +169,55 @@ def load(csv_path, db_path=DEFAULT_DB, as_of=None):
 
 
 # --------------------------------------------------------------------------- read-only query
+def _strip_literals_and_comments(stmt):
+    """Blank out SQL string literals, ``--`` line comments and ``/* */`` block comments via a single
+    left-to-right scan, so the structural safety checks (single-statement, no DDL keywords) can't be
+    fooled by a keyword/``;`` hidden inside a literal OR a comment (and a ``--`` inside a real literal is
+    not mistaken for a comment). Returns the statement with each such span replaced by a space."""
+    out = []
+    i, n = 0, len(stmt)
+    while i < n:
+        c = stmt[i]
+        if c == "'":                                        # string literal ('' escapes a quote)
+            i += 1
+            while i < n:
+                if stmt[i] == "'":
+                    if i + 1 < n and stmt[i + 1] == "'":
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            out.append(" ")
+        elif c == "-" and i + 1 < n and stmt[i + 1] == "-":  # -- line comment
+            i += 2
+            while i < n and stmt[i] != "\n":
+                i += 1
+            out.append(" ")
+        elif c == "/" and i + 1 < n and stmt[i + 1] == "*":  # /* block comment */
+            i += 2
+            while i + 1 < n and not (stmt[i] == "*" and stmt[i + 1] == "/"):
+                i += 1
+            i += 2
+            out.append(" ")
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def _validate_query(sql):
     stmt = (sql or "").strip()
     if stmt.endswith(";"):
         stmt = stmt[:-1].strip()
     if not stmt:
         raise ValueError("empty query")
-    if ";" in stmt:
-        raise ValueError("only a single statement is allowed")
-    low = stmt.lower()
-    if not (low.startswith("select") or low.startswith("with")):
+    if not stmt.lower().startswith(("select", "with")):
         raise ValueError("only read-only SELECT/WITH queries are allowed")
+    scan = _strip_literals_and_comments(stmt)   # structural checks ignore literal/comment contents
+    if ";" in scan:
+        raise ValueError("only a single statement is allowed")
+    low = scan.lower()
     for kw in ("attach", "detach", "pragma", "insert", "update", "delete", "drop",
                "alter", "create", "replace", "reindex", "vacuum", "begin", "commit"):
         if re.search(rf"\b{kw}\b", low):

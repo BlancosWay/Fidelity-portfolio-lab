@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **Three small correctness/usability fixes.** (a) `options`/`expiration` now label an at-the-money
+  contract (spot == strike) as `ATM` rather than `OTM`. (b) `parse_qty` reads a parenthesized quantity
+  as negative (`"(100)"` → −100), matching the browser exporter's `num()`, instead of silently 0. (c) the
+  `query` validator strips single-quoted string literals before its keyword/`;` scan, so a legitimate
+  literal (`symbol='CREATE'`, `LIKE '%replace%'`) is allowed while real DDL and multi-statement queries
+  stay rejected.
 - **`parse_option` reads standard 8-digit OCC strikes correctly (defensive).** A standard OCC symbol
   packs the strike as 8 digits in thousandths of a dollar (`00150000` = $150.00); the parser previously
   read it as a plain integer (150000), overstating notional/assignment cash 1000×. It now divides an

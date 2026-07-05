@@ -224,6 +224,21 @@ class DeepDiveReproPortfolioTests(unittest.TestCase):
         stmt2 = portfolio._validate_query("SELECT * FROM lots WHERE description LIKE '%replace%'")
         self.assertIn("replace", stmt2)
 
+    def test_f9c_ddl_and_second_statement_still_rejected(self):
+        # Literal-stripping must not weaken the guard: unquoted DDL and a real second statement still raise.
+        for bad in ("SELECT 1; DROP TABLE lots",
+                    "DROP TABLE lots",
+                    "SELECT * FROM lots; DELETE FROM lots",
+                    "UPDATE lots SET symbol='x'",
+                    "SELECT * FROM lots WHERE 1=1 DROP TABLE lots",
+                    "SELECT 1 /* ' */ ; DROP TABLE lots -- '",   # comment-hidden ; and DROP
+                    "SELECT 1 -- '\n; DROP TABLE lots"):
+            with self.assertRaises(ValueError, msg=bad):
+                portfolio._validate_query(bad)
+        # A real literal containing '--' or ';' is still allowed (not mistaken for a comment/separator).
+        self.assertIn("A--B", portfolio._validate_query("SELECT * FROM lots WHERE symbol='A--B'"))
+        self.assertIn("a;b", portfolio._validate_query("SELECT * FROM lots WHERE symbol='a;b'"))
+
 
 if __name__ == "__main__":
     unittest.main()
