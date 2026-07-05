@@ -488,12 +488,21 @@ def _securities_match(a, b, same_underlying):
 
 
 def _is_acquisition(rec):
-    """A purchase that can trigger a wash sale: an equity BUY/REINVEST, or a buy-to-open of a long
-    option ("YOU BOUGHT OPENING" -> action_kind OPTION_OPEN). Writing an option (sell-to-open) is not
-    an acquisition, so it is excluded."""
+    """A purchase that can trigger a wash sale: a definite equity BUY/REINVEST, a buy-to-open of a long
+    option ("YOU BOUGHT OPENING" -> action_kind OPTION_OPEN), or an INFERRED re-acquisition via option
+    assignment/exercise or an inbound transfer/exchange/journal (action_kind ACQUIRE_INFERRED) that
+    actually brought shares in (``signed_qty > 0``). Writing an option (sell-to-open) or an outbound
+    transfer (signed_qty <= 0) is not an acquisition, so it is excluded."""
     if rec["action_kind"] in ("BUY", "REINVEST"):
         return True
-    return rec["action_kind"] == "OPTION_OPEN" and (rec.get("action") or "").upper().startswith("YOU BOUGHT")
+    if rec["action_kind"] == "OPTION_OPEN" and (rec.get("action") or "").upper().startswith("YOU BOUGHT"):
+        return True
+    if rec["action_kind"] == "ACQUIRE_INFERRED":
+        try:
+            return float(rec.get("signed_qty")) > 0
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
@@ -525,9 +534,13 @@ def washsale(loss_candidates, history, as_of, window=30, same_underlying=False):
         for b in buys:
             if lo <= b["date"] <= hi and _securities_match(sk, sk_of(b), same_underlying):
                 category = wash_category(b["account"])
+                inferred = b["action_kind"] == "ACQUIRE_INFERRED"
+                # An inferred (non-BUY) re-acquisition is never asserted as a definite wash sale: cap it
+                # at REVIEW regardless of account category. Definite BUY/REINVEST/buy-to-open keep the map.
+                severity = "REVIEW" if inferred else WASH_SEVERITY[category]
                 triggers.append(
                     {"date": b["date"].isoformat(), "account": b["account"], "action": b["action_kind"],
-                     "qty": b["abs_qty"], "category": category, "severity": WASH_SEVERITY[category]})
+                     "qty": b["abs_qty"], "category": category, "severity": severity, "inferred": inferred})
         if not triggers:
             status = "CLEAN"
         else:

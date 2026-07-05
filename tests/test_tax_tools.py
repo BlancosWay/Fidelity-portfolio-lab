@@ -1184,6 +1184,24 @@ class DeepDiveReproTests(unittest.TestCase):
             res = tt.washsale([loss], [rec], dt.date(2026, 6, 15), 30)
             self.assertNotEqual(res["candidates"][0]["status"], "CLEAN", action)
 
+    def test_f2_inferred_acquisitions_capped_at_review(self):
+        import history as H
+        loss = lot(symbol="AAA", quantity=100.0, gain_loss=-1000.0, date_acquired="2026-06-01",
+                   current_value=5000.0, cost_basis_total=6000.0)
+        # An inferred (non-BUY) acquisition is capped at REVIEW in EVERY account -- never BLOCKED/CAUTION.
+        for acct in ["Roth IRA", "Joint Brokerage Test"]:
+            rec = hrec(dt.date(2026, 6, 10), acct, "AAA", kind=H.classify_action("ASSIGNED"), action="ASSIGNED")
+            c = tt.washsale([loss], [rec], dt.date(2026, 6, 15), 30)["candidates"][0]
+            self.assertEqual(c["status"], "REVIEW", acct)
+            self.assertTrue(c["triggers"][0]["inferred"])
+        # A DEFINITE Roth BUY still escalates to BLOCKED (the cap only applies to inferred triggers).
+        buy = hrec(dt.date(2026, 6, 10), "Roth IRA", "AAA", kind="BUY")
+        self.assertEqual(tt.washsale([loss], [buy], dt.date(2026, 6, 15), 30)["candidates"][0]["status"], "BLOCKED")
+        # An OUTBOUND inferred transfer (signed_qty <= 0) is not an acquisition -> CLEAN.
+        out = hrec(dt.date(2026, 6, 10), "Joint Brokerage Test", "AAA",
+                   kind=H.classify_action("TRANSFERRED"), qty=-5.0, action="TRANSFERRED")
+        self.assertEqual(tt.washsale([loss], [out], dt.date(2026, 6, 15), 30)["candidates"][0]["status"], "CLEAN")
+
     # F3: the disallowed loss is quantity-aware (apportioned to matched replacement shares),
     # not the whole loss when only a fraction of the shares are replaced.
     def test_f3_washsale_disallowed_is_quantity_aware(self):

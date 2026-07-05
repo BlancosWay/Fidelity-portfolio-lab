@@ -82,7 +82,9 @@ Real data:
 > **BLOCKED** for an IRA/Roth/HSA buy (permanent disallowance, e.g. Rev. Rul. 2008-5 for IRAs),
 > **REVIEW** for a 401(k)/403(b)/BrokerageLink/529 buy (no IRS guidance; prevailing view is the rule
 > does **not** apply), else **CAUTION** for another taxable account — plus a forward "don't repurchase
-> within N days" reminder and a ±`--window` audit of past sells.
+> within N days" reminder and a ±`--window` audit of past sells. A non-BUY re-acquisition (option
+> assignment/exercise or an inbound transfer/exchange/journal, marked `*`) is treated as an **inferred**
+> replacement and capped at **REVIEW** (never asserted as a definite wash sale).
 >
 > `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
 > to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income

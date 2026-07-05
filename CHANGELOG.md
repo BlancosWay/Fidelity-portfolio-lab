@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **Wash-sale now surfaces non-BUY re-acquisitions (option assignment/exercise, inbound transfers).**
+  A replacement position re-acquired via an option assignment/exercise or an inbound transfer/exchange/
+  journal was classified `OTHER` and silently rated CLEAN. These are now treated as **inferred**
+  acquisitions (counted only when shares actually came in, `signed_qty > 0`) and, because the inference
+  is less certain than an explicit purchase, their status is **capped at REVIEW** — never BLOCKED/CAUTION
+  — so the tool flags them for verification without asserting a definite wash sale. Definite BUY/REINVEST/
+  buy-to-open keep the full severity map.
 - **`wash_category` now uses a word boundary for "529", matching `is_taxable`.** A taxable account whose
   name merely contained the digits "529" (e.g. "Individual 5291", "X529 Brokerage") was classified as a
   529 plan for wash-sale severity — softening a genuine taxable wash sale from CAUTION to REVIEW — even

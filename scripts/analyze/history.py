@@ -20,7 +20,12 @@ SELL_KINDS = {"SELL"}
 
 
 def classify_action(action):
-    """Map a Fidelity Action string to a normalized kind."""
+    """Map a Fidelity Action string to a normalized kind.
+
+    ``ACQUIRE_INFERRED`` covers non-BUY routes that MAY re-acquire a position — option
+    assignment/exercise and inbound transfers/exchanges/journals. These are less certain than an
+    explicit purchase, so ``_is_acquisition`` only counts them when shares actually came in
+    (``signed_qty > 0``) and the wash-sale guardrail caps their severity at REVIEW."""
     a = (action or "").upper()
     if a.startswith("REINVESTMENT"):
         return "REINVEST"
@@ -35,6 +40,9 @@ def classify_action(action):
         return "BUY"
     if a.startswith("YOU SOLD"):
         return "SELL"
+    if ("EXERCISED" in a) or ("ASSIGNED" in a) or ("TRANSFER" in a) or ("EXCHANGE" in a) \
+            or ("JOURNAL" in a):
+        return "ACQUIRE_INFERRED"   # possible replacement via a non-BUY route; verified by qty + REVIEW
     return "OTHER"
 
 
