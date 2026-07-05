@@ -77,7 +77,11 @@ Real data:
 > prints `No portfolio loaded at <db>. Run: ... load <lots.csv>` and exits (`query` with a non-zero code).
 > `harvest`/`ripening` cover taxable accounts only — any account whose name matches
 > IRA/Roth/HSA/BrokerageLink/401k/403b/529 is treated as tax-advantaged and excluded, and every other
-> account is treated as taxable. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
+> account is treated as taxable. This classification is inferred from the account **name** only, so an
+> unusual name that contains one of those tokens as a whole word (e.g. a taxable trust named "Roth Family
+> Trust", or a person named "Ira" — but not "Kira", which doesn't word-match) is conservatively treated as
+> tax-advantaged and excluded from harvesting — check the per-account taxable/advantaged label in
+> `dashboard` and rename the account if it is mislabeled. `washsale` needs a Fidelity **Accounts History** CSV and only sees the
 > window you export (so `CLEAN` is not a guarantee): for each current taxable loss it flags a
 > same-security purchase in the **prior `--window` days through `--as-of`** in *any* account —
 > **BLOCKED** for an IRA/Roth/HSA buy (permanent disallowance, e.g. Rev. Rul. 2008-5 for IRAs),

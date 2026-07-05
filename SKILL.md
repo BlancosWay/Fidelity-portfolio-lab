@@ -73,7 +73,11 @@ and in each account's market value but is excluded from the Long/Short split.
 All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
 (default `0.32`) and `--lt-rate` (default `0.15`) only affect the labeled estimates. `harvest`/
 `dashboard` also take `--max-ordinary-offset` (default `3000`; set `1500` for married-filing-separately)
-to cap the annual net-capital-loss deduction against ordinary income.
+to cap the annual net-capital-loss deduction against ordinary income. Whether an account is taxable vs
+tax-advantaged (and its wash-sale category) is inferred from the account **name** only: a name that
+contains "roth"/"ira"/"hsa"/"529" as a whole word (e.g. a taxable "Roth Family Trust", or a person named
+"Ira" — but not "Kira") is conservatively treated as tax-advantaged and excluded from harvesting/selling
+— check the per-account taxable/advantaged label in `dashboard` and rename the account if it is mislabeled.
 ```
 python scripts/analyze/portfolio.py harvest                       # tax-loss harvest candidates (taxable accounts, short-term first)
 python scripts/analyze/portfolio.py ripening --within 60          # short-term lots about to become long-term

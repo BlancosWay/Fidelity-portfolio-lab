@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `1500`. `_net_capital_tax`, `harvest`, and `liquidation_estimate` thread the cap through; the default
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
+### Documentation
+- **Documented that account taxable/tax-advantaged and wash-sale classification is inferred from the
+  account name.** An unusual name containing "roth"/"ira"/"hsa"/"529" as a whole word (e.g. a taxable
+  "Roth Family Trust") is conservatively treated as tax-advantaged and excluded from harvesting; the
+  README and SKILL now note this and advise verifying the per-account label in `dashboard`.
+
 ### Fixed
 - **Three small correctness/usability fixes.** (a) `options`/`expiration` now label an at-the-money
   contract (spot == strike) as `ATM` rather than `OTM`. (b) `parse_qty` reads a parenthesized quantity
