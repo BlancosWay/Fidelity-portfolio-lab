@@ -990,7 +990,14 @@ def parse_option(lot):
         except ValueError:
             expiry = None
         otype = "call" if m.group(5) == "C" else "put"
-        strike = float(m.group(6))
+        strike_tok = m.group(6)
+        # Standard OCC packs the strike as 8 digits in thousandths of a dollar (e.g. "00150000" = 150.00);
+        # Fidelity's short history style writes the plain strike (e.g. "C30" = 30). Disambiguate on the
+        # exact 8-digit, no-decimal OCC encoding so a short-style strike is never mis-scaled.
+        if len(strike_tok) == 8 and "." not in strike_tok:
+            strike = int(strike_tok) / 1000.0
+        else:
+            strike = float(strike_tok)
     return {"underlying": underlying, "strike": strike, "type": otype, "expiry": expiry,
             "contracts": contracts, "long": contracts >= 0, "multiplier": 100}
 

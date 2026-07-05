@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Fixed
+- **`parse_option` reads standard 8-digit OCC strikes correctly (defensive).** A standard OCC symbol
+  packs the strike as 8 digits in thousandths of a dollar (`00150000` = $150.00); the parser previously
+  read it as a plain integer (150000), overstating notional/assignment cash 1000×. It now divides an
+  exactly-8-digit, no-decimal OCC strike by 1000, leaving Fidelity's short style (`C30` = $30) unchanged.
+  Latent hardening — Fidelity's positions export never emits OCC-style option symbols.
 - **`load` tolerates benign Fidelity header drift instead of bricking.** The exact header-equality check
   rejected the whole export if Fidelity added, renamed-adjacent, or reordered a single column. Values are
   now mapped by column NAME, so extra and reordered columns are ignored; only a genuinely MISSING
