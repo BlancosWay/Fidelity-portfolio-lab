@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every existing estimate unchanged. Estimates only, not tax advice.
 
 ### Documentation
+- **Guidance to verify current tax rules via web search before relying on the baked-in tiers.** The
+  wash-sale tiers and cited authority (IRS Rev. Rul. 2008-5) are point-in-time, and tax/investment law
+  changes yearly. SKILL.md and the README now instruct the agent to confirm the current rule via web
+  search (or a tax pro) before advising — especially the unsettled 401(k)/403(b)/BrokerageLink/529
+  treatment — while the Python tool itself stays no-network by design.
 - **Documented that account taxable/tax-advantaged and wash-sale classification is inferred from the
   account name.** An unusual name containing "roth"/"ira"/"hsa"/"529" as a whole word (e.g. a taxable
   "Roth Family Trust") is conservatively treated as tax-advantaged and excluded from harvesting; the

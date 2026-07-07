@@ -70,7 +70,16 @@ creates a file: run before any `load` (or against a deleted DB) and it prints
 and in each account's market value but is excluded from the Long/Short split.
 
 ### 4. Tax / portfolio tools (Tier-1)
-All read-only; every dollar/tax figure is an **estimate, not tax advice**. Rate flags `--st-rate`
+All read-only; every dollar/tax figure is an **estimate, not tax advice**.
+
+> **Verify current tax rules before advising.** The wash-sale tiers and any cited authority below
+> (e.g. IRS Rev. Rul. 2008-5) are **point-in-time** — tax and investment law changes yearly. When you
+> advise the user on tax treatment (wash sales, cap-gains rates, contribution/deduction limits, the
+> $3,000 loss cap, etc.), **do a web search to confirm the current rule first** and note if anything
+> has changed, rather than relying solely on these baked-in defaults. (The Python tool itself is
+> **no-network** by design; this verification is *your* responsibility as the agent, not the tool's.)
+
+Rate flags `--st-rate`
 (default `0.32`) and `--lt-rate` (default `0.15`) only affect the labeled estimates. `harvest`/
 `dashboard` also take `--max-ordinary-offset` (default `3000`; set `1500` for married-filing-separately)
 to cap the annual net-capital-loss deduction against ordinary income. Whether an account is taxable vs
@@ -118,6 +127,9 @@ python scripts/analyze/portfolio.py expiration --within 30         # options exp
   or an inbound transfer/exchange/journal) is treated as an **inferred** replacement (marked `*`) and
   capped at **REVIEW**. The disallowed loss is quantity-apportioned (only the loss on shares matched by
   the replacement is disallowed). Limitation: it only sees the history window you export, so `CLEAN` is not a guarantee.
+  These tiers reflect point-in-time IRS guidance (Rev. Rul. 2008-5 is IRA-only; the 401(k)/403(b)/
+  BrokerageLink/529 treatment is unsettled) — **web-search the current rule before you rely on a tier**,
+  since the law changes yearly.
 - **`capacity`** — bracket-aware realized-gain planner over taxable **long-term gain** lots. Fills
   either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income ceiling you
   supply, selecting the biggest-gain lots first (final lot taken partially). `--within-rate` (default
