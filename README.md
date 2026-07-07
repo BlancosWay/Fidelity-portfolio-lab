@@ -91,7 +91,9 @@ Real data:
 > assignment/exercise or an inbound transfer/exchange/journal, marked `*`) is treated as an **inferred**
 > replacement and capped at **REVIEW** (never asserted as a definite wash sale). The disallowed loss is
 > **quantity-apportioned** — only the loss on shares matched by the replacement is disallowed (shown as
-> "Disallowed $ (est)").
+> "Disallowed $ (est)"). These tiers and the Rev. Rul. 2008-5 citation are **point-in-time**; tax law
+> changes yearly, so **confirm the current rule via web search (or a tax pro) before relying on a tier**
+> — especially the unsettled 401(k)/403(b)/BrokerageLink/529 treatment.
 >
 > `capacity` selects taxable **long-term gain** lots (largest gain first, final lot taken partially)
 > to realize either a `--target-gain` or the headroom `max(0, --ceiling − --income)` to an income
