@@ -34,6 +34,27 @@
   const accounts = document.querySelectorAll('.posweb-row-account');
   P('account rows (.posweb-row-account): ' + accounts.length);
 
+  // Position symbol cells -- how each position renders its symbol/description in the pinned-left grid.
+  // Purpose: some OPTION positions (esp. covered calls / cash-secured puts) export with the underlying
+  // ticker + company name (e.g. "AAPL" / "APPLE INC") instead of the option contract name + expiry
+  // (e.g. "GOOG 200 Put" / "Sep-18-2026"). Compare a known-good option row to a mislabeled one here to
+  // see WHICH element holds the full option name so the exporter's symOf()/desc can be pointed at it.
+  const symCells = [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"].posweb-row-position [col-id="sym"]')];
+  P('\nPOSITION SYMBOL CELLS (' + symCells.length + '):  [row-index] span | desc | a11y | btnText | expandable');
+  symCells.forEach(cell => {
+    const row = cell.closest('[role="row"]');
+    const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
+    const span = cell.querySelector('.posweb-cell-symbol-name_container > span');
+    const desc = cell.querySelector('.posweb-cell-symbol-description');
+    const a11y = [...cell.querySelectorAll('.posweb-cell-a11y_indicator')].map(e => clean(e.textContent)).filter(Boolean);
+    P('  [' + (row ? row.getAttribute('row-index') : '?') + ']'
+      + ' span=' + JSON.stringify(span ? clean(span.textContent) : null)
+      + ' | desc=' + JSON.stringify(desc ? clean(desc.textContent) : null)
+      + ' | a11y=' + JSON.stringify(a11y)
+      + ' | btn=' + JSON.stringify(tr(clean(nameBtn ? nameBtn.textContent : ''), 40))
+      + ' | expandable=' + !!(nameBtn && nameBtn.hasAttribute('aria-expanded')));
+  });
+
   const lt = document.querySelector('table.posweb-purchase-history') || document.querySelector('table.pvd-table__table');
   if (lt) {
     P('\nLOT TABLE class="' + cls(lt) + '"');
@@ -45,6 +66,31 @@
     P('  containing row-index: ' + (dr ? dr.getAttribute('row-index') : '(none)'));
   } else {
     P('\nLOT TABLE: none rendered - expand ONE position (+) first, then re-run.');
+  }
+
+  // Expanded drawer detail -- the authoritative option identity the user sees on expansion
+  // (e.g. "GOOG Sep-18-2026 $200 PUT") lives in the drawer header, and the full purchase-history
+  // table (every lot, every column) lives inside. Dump both, plus each row's cell count vs the header
+  // count, so the exporter can be pointed at the real option name and the correct value columns.
+  const drawer = document.querySelector('.posweb-drawer-detail');
+  if (drawer) {
+    P('\nEXPANDED DRAWER (.posweb-drawer-detail):');
+    const heads = [...drawer.querySelectorAll('h1,h2,h3,h4,[class*="title"],[class*="header"],[class*="name"]')]
+      .map(e => clean(e.innerText)).filter(Boolean);
+    P('  headings/titles: ' + JSON.stringify([...new Set(heads)].slice(0, 12)));
+    const ph = drawer.querySelector('table.posweb-purchase-history');
+    if (ph) {
+      const th = [...ph.querySelectorAll('thead th, thead td')].map(c => clean(c.innerText));
+      P('  purchase-history THEAD (' + th.length + '): ' + th.join(' | '));
+      const brs = [...ph.querySelectorAll('tbody tr')];
+      P('  purchase-history rows: ' + brs.length);
+      brs.forEach((r, i) => {
+        const cellsArr = [...r.children].map(c => clean(c.innerText));
+        P('   row' + i + ' (' + cellsArr.length + ' cells): ' + cellsArr.map(c => tr(c, 18)).join(' | '));
+      });
+    }
+  } else {
+    P('\nEXPANDED DRAWER: none open - expand ONE position (+) first, then re-run.');
   }
 
   const vp = document.querySelector('.ag-body-viewport');

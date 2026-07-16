@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README and SKILL now note this and advise verifying the per-account label in `dashboard`.
 
 ### Fixed
+- **Option lots (covered calls / cash-secured puts) were exported under the underlying stock's
+  ticker.** The browser exporter paired each lot's label with its purchase-history drawer by shared
+  list index, but the up-front position list excluded cash/money-market rows while the live
+  expander list did not — and every account is led by a Cash row. That one-row offset paired a
+  stock's symbol/description with an adjacent option's lot drawer, so an option's per-contract
+  premiums were written under e.g. `AAPL`/`APPLE INC` and then misclassified as stock by
+  `security_key`. `expanders()` now applies the same cash/core exclusion as the position count, and
+  each lot's account/symbol/description/type is read from the very button whose drawer is scraped
+  (never a separately-indexed snapshot), so the label and values always describe one position; a
+  position-count drift now warns instead of silently shifting.
+- **`Margin/Cash` column was polluted with market-status text.** The type was read from a
+  `.posweb-cell-a11y_indicator` span that Fidelity also uses for transient hints ("Not Priced
+  Today", "Has Activity Today"), so the column filled with those instead of the position type. It
+  now scans those spans and keeps only a real type (`Margin`/`Cash`/`Short`), leaving it blank
+  otherwise.
 - **Three small correctness/usability fixes.** (a) `options`/`expiration` now label an at-the-money
   contract (spot == strike) as `ATM` rather than `OTM`. (b) `parse_qty` reads a parenthesized quantity
   as negative (`"(100)"` → −100), matching the browser exporter's `num()`, instead of silently 0. (c) the

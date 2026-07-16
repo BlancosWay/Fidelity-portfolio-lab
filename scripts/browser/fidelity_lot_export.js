@@ -93,12 +93,12 @@
       console.warn(`${collapsedGroups().length} account group(s) still collapsed; their positions may be omitted. Click "Expand groups" (or each "Account:" row) and re-run for a complete export.`);
     }
   }
-  // The Positions grid is NOT scroll-virtualised (all rows stay in the DOM), so enumerate every
-  // expandable position up front: its account (nearest preceding "Account:" row), symbol, and
-  // margin/cash sub-label. We then process ONE position at a time -- expand it, read its lot table,
-  // collapse it -- re-locating each position's expander button by (account, symbol) at click time
-  // (never trusting a stored, possibly-stale element ref). Opening ALL drawers at once makes the grid
-  // tall enough that Fidelity starts virtualising (dropping) off-screen drawers, which truncated large
+  // The Positions grid is NOT scroll-virtualised (all rows stay in the DOM), so count the scrapeable
+  // lot positions up front (excluding cash/core rows -- see queue build) and then process ONE at a
+  // time -- expand it, read its lot table, collapse it -- re-locating each expander fresh by ordinal
+  // in expanders() at click time (never trusting a stored, possibly-stale element ref) and reading
+  // that position's identity from its own button. Opening ALL drawers at once makes the grid tall
+  // enough that Fidelity starts virtualising (dropping) off-screen drawers, which truncated large
   // accounts mid-way (missing lots); keeping at most one drawer open avoids that and captures all.
   const pinnedRowsNow = () => [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')]
     .map(r => ({ r, ri: parseInt(r.getAttribute('row-index'), 10) }))
@@ -106,21 +106,53 @@
   const acctOf = cell => cell ? (clean(txt(cell, '.posweb-cell-account_primary') + ' ' + txt(cell, '.posweb-cell-account_secondary')) || clean(cell.textContent).replace(/^Account:\s*/i, '')) : '';
   const symOf = nameBtn => txt(nameBtn, '.posweb-cell-symbol-name_container > span') || clean(nameBtn.textContent).split(' ')[0];
   const isExpander = nameBtn => !!nameBtn && nameBtn.tagName === 'BUTTON' && nameBtn.hasAttribute('aria-expanded');
+  // subOf -- the Margin/Cash position type. Fidelity renders it as a .posweb-cell-a11y_indicator span,
+  // but that SAME class is reused for market-status accessibility hints ("Has Activity Today",
+  // "Not Priced Today") that shift with market state and would otherwise pollute the Margin/Cash
+  // column (observed filling it with those hints instead of the type). Scan every indicator in the
+  // cell and keep only a real position type (Margin / Cash / Short); otherwise leave it blank.
+  const TYPE_RE = /^(margin|cash|short)$/i;
+  const subOf = cell => [...cell.querySelectorAll('.posweb-cell-a11y_indicator')].map(el => clean(el.textContent)).find(t => TYPE_RE.test(t)) || '';
 
-  // expanders(): the live expander buttons in DOM order. We address each position by its ORDINAL in
-  // this list -- collision-proof even if the same symbol appears twice in one account (e.g. a margin
-  // and a cash row), and re-located fresh at click time so a row re-render can't invalidate a ref.
-  // The grid is not virtualised and we keep at most one drawer open, so the list stays stable/ordered.
+  // accountOfRow(row): the account label for a position row -- the nearest PRECEDING
+  // .posweb-row-account. Lets a scraped lot read its account from the SAME row as its drawer (mirrors
+  // the up-front curAcct tracking), instead of trusting a separately-indexed queue entry.
+  const accountOfRow = row => {
+    if (!row) return '';
+    const ri = parseInt(row.getAttribute('row-index'), 10);
+    let acct = '', best = -Infinity;
+    for (const { r, ri: rj } of pinnedRowsNow()) {
+      if (rj < ri && rj > best && r.classList.contains('posweb-row-account')) { best = rj; acct = acctOf(r.querySelector('[col-id="sym"]')); }
+    }
+    return acct;
+  };
+
+  // expanders(): the live lot-expander buttons in DOM order, using the SAME lot-row predicate as the
+  // up-front queue build -- position rows, but EXCLUDING cash/core money-market rows
+  // (.posweb-row-core). Cash rows carry an expander yet have no purchase-history drawer and are
+  // captured separately as value-only cashRows; the queue skips them, so this list MUST skip them too.
+  // Keeping the predicates identical is load-bearing: the loop walks this list by ordinal, so a leaked
+  // cash row (which has no lot drawer) would be clicked as if it were a lot and would shift the count,
+  // dropping a trailing position. (Label/drawer identity is independently protected -- the loop reads
+  // each lot's identity from its own button -- so a mismatch can never mislabel.) Re-located fresh at
+  // click time so a row re-render can't invalidate a ref; the grid is not virtualised and we keep at
+  // most one drawer open, so the list stays stable/ordered.
   const expanders = () => {
     const out = [];
     for (const { r } of pinnedRowsNow()) {
       if (!r.classList.contains('posweb-row-position')) continue;
+      if (r.classList.contains('posweb-row-core')) continue; // cash/core -- no lot drawer (see queue build)
       const cell = r.querySelector('[col-id="sym"]'); if (!cell) continue;
       const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
       if (isExpander(nameBtn)) out.push(nameBtn);
     }
     return out;
   };
+  // Up-front single pass: collect cash/core rows as value-only cashRows, and count the scrapeable lot
+  // positions (posweb-row-position, NOT core, with an expander) into queue -- the SAME predicate as
+  // expanders(). queue is now used only for that count (empty-portfolio guard, progress log, and the
+  // drift check against the live expander list); each lot's identity is read from its own button in
+  // the scrape loop, never from here.
   const queue = [], cashRows = [];
   let curAcct = '';
   const curValAt = ri => { const c = document.querySelector('.ag-center-cols-container [role="row"][row-index="' + ri + '"] [col-id="curVal"]'); return c ? clean(c.textContent) : ''; };
@@ -138,7 +170,7 @@
     }
     const nameBtn = cell.querySelector('.posweb-cell-symbol-name');
     if (!isExpander(nameBtn)) return; // other non-expandable rows
-    queue.push({ account: curAcct, symbol: symOf(nameBtn), desc: txt(cell, '.posweb-cell-symbol-description'), sub: txt(cell, '.posweb-cell-a11y_indicator') });
+    queue.push(nameBtn); // counted only; identity is bound per-button in the scrape loop
   });
   const expanderCount = document.querySelectorAll(EXP).length;
   if (!queue.length && !cashRows.length && !document.querySelector('table.posweb-purchase-history')) { console.warn('No expandable positions found. Make sure your positions are listed (not collapsed under account headers), then retry.'); return; }
@@ -155,8 +187,12 @@
 
   const lots = [];
   let done = 0, missed = 0;
-  for (let i = 0; i < queue.length; i++) {
-    const pos = queue[i];
+  // Drive the loop by the live lot-expander count, which now shares the queue's predicate (cash/core
+  // excluded). If it disagrees with the queue length the grid re-rendered mid-scan -- warn so the user
+  // can re-run -- but keep going off the expander list (it is what we actually click and scrape).
+  const nPositions = expanders().length;
+  if (nPositions !== queue.length) console.warn(`Position count drifted (${nPositions} lot-expanders vs ${queue.length} queued); the grid re-rendered -- if any symbol looks off, re-run.`);
+  for (let i = 0; i < nPositions; i++) {
     // Start from a clean state: collapse any drawer left open (previous position or a manual expand)
     // and wait until none remain, so the drawer we open next is unambiguously THIS position's.
     collapseOpen();
@@ -164,6 +200,12 @@
     const before = new Set(drawers()); // any drawer that stubbornly stayed open -- excluded below
     const btn = expanders()[i];
     if (!btn) { missed++; continue; }
+    // Bind this lot's identity to the SAME button whose drawer we are about to scrape, read from its
+    // own grid cell NOW (before expanding, while btn is fresh). The label and the lot values then
+    // always describe one position -- never a separately-indexed queue entry that a re-render could
+    // slide out of alignment (which exported an option's premiums under the underlying stock's ticker).
+    const symCell = btn.closest('[col-id="sym"]');
+    const pos = { account: accountOfRow(btn.closest('[role="row"]')), symbol: symOf(btn), desc: symCell ? txt(symCell, '.posweb-cell-symbol-description') : '', sub: symCell ? subOf(symCell) : '' };
     try { btn.scrollIntoView({ block: 'center' }); } catch (e) {}
     if (btn.getAttribute('aria-expanded') !== 'true') { try { safeClick(btn); } catch (e) {} }
     await waitUntil(() => btn.getAttribute('aria-expanded') === 'true', 2000);
@@ -185,9 +227,9 @@
       });
     });
     if (!gotRows) missed++;
-    const cb = expanders()[i]; // collapse this drawer before the next one
-    if (cb && cb.getAttribute('aria-expanded') === 'true') { try { safeClick(cb); } catch (e) {} }
-    if (++done % 10 === 0) console.log(`  read ${done}/${queue.length} positions, ${lots.length} lots so far...`);
+    // collapse THIS drawer via the btn we opened (top-of-loop collapseOpen() is the safety net)
+    if (btn.getAttribute('aria-expanded') === 'true') { try { safeClick(btn); } catch (e) {} }
+    if (++done % 10 === 0) console.log(`  read ${done}/${nPositions} positions, ${lots.length} lots so far...`);
   }
   collapseOpen(); // safety net: collapse anything still open
   if (missed) console.warn(`${missed} position(s) returned no purchase-history rows; if a symbol looks short, re-run.`);
