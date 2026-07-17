@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README and SKILL now note this and advise verifying the per-account label in `dashboard`.
 
 ### Fixed
+- **Exporter is now resilient to the tab being backgrounded.** Chrome throttles timers and pauses
+  rendering in a hidden tab, so switching to another window/tab mid-run left lot drawers un-rendered,
+  expired the exporter's waits, and silently dropped those positions (whole accounts could collapse
+  to just their cash row) while running very slowly. The waits now treat "hidden" as paused — they
+  don't count timeout or test a non-rendering DOM while the tab is hidden, and the scrape loop parks
+  until you return — plus a foreground reminder up front and an end-of-run `Scraped X/N positions`
+  summary that flags a backgrounded run so you know to re-run.
 - **Option lots (covered calls / cash-secured puts) were exported under the underlying stock's
   ticker.** The browser exporter paired each lot's label with its purchase-history drawer by shared
   list index, but the up-front position list excluded cash/money-market rows while the live

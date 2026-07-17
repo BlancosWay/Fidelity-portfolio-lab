@@ -22,6 +22,13 @@
  */
 (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // Background-tab resilience: Chrome throttles timers and PAUSES rendering/layout in a hidden tab,
+  // so a drawer clicked while you're on another window/tab never renders and our waits would expire --
+  // silently dropping those positions. So treat "hidden" as paused: waits below don't accrue their
+  // timeout or test the (non-rendering) DOM while hidden, and the scrape loop parks until you return.
+  const hidden = () => document.visibilityState === 'hidden' || document.hidden === true;
+  let wasHidden = false;
+  const waitVisible = async () => { while (hidden()) { wasHidden = true; await sleep(300); } };
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const num = s => { const n = parseFloat(String(s).replace(/[()]/g, '-').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : n; };
   const AS_OF = new Date(); AS_OF.setHours(0, 0, 0, 0); // compare calendar dates, not instants
@@ -37,7 +44,18 @@
   };
   const txt = (el, sel) => { const n = el && el.querySelector(sel); return n ? clean(n.textContent) : ''; };
   const EXP = '.ag-pinned-left-cols-container button.posweb-cell-symbol-name[aria-expanded="false"]';
-  const waitUntil = async (fn, t) => { const t0 = Date.now(); while (Date.now() - t0 < t) { if (fn()) return true; await sleep(80); } return false; };
+  // waitUntil: poll fn() until true or the FOREGROUND-time budget t (ms) is spent. Time spent while
+  // the tab is hidden does not count (the DOM is not rendering, so fn() can't legitimately become
+  // true) -- we park instead, so switching away pauses rather than fails the wait.
+  const waitUntil = async (fn, t) => {
+    let spent = 0;
+    while (true) {
+      if (hidden()) { wasHidden = true; await sleep(200); continue; }
+      if (fn()) return true;
+      if (spent >= t) return false;
+      await sleep(80); spent += 80;
+    }
+  };
 
   // safeClick -- the ONLY place a click happens. It verifies the element at RUNTIME and refuses
   // anything that is not one of our four approved read-only targets: the local blob-download anchor,
@@ -192,7 +210,9 @@
   // can re-run -- but keep going off the expander list (it is what we actually click and scrape).
   const nPositions = expanders().length;
   if (nPositions !== queue.length) console.warn(`Position count drifted (${nPositions} lot-expanders vs ${queue.length} queued); the grid re-rendered -- if any symbol looks off, re-run.`);
+  console.log('%cKeep this tab in the FOREGROUND until it says "Saved" -- switching to another window/tab pauses the browser. The script now auto-pauses while hidden and resumes when you return, but staying here is fastest.', 'color:#b30000;font-weight:bold');
   for (let i = 0; i < nPositions; i++) {
+    await waitVisible(); // park here (don't click into a hidden tab) if you've switched away
     // Start from a clean state: collapse any drawer left open (previous position or a manual expand)
     // and wait until none remain, so the drawer we open next is unambiguously THIS position's.
     collapseOpen();
@@ -232,7 +252,8 @@
     if (++done % 10 === 0) console.log(`  read ${done}/${nPositions} positions, ${lots.length} lots so far...`);
   }
   collapseOpen(); // safety net: collapse anything still open
-  if (missed) console.warn(`${missed} position(s) returned no purchase-history rows; if a symbol looks short, re-run.`);
+  console.log(`Scraped ${nPositions - missed}/${nPositions} positions (${missed} missed), ${lots.length} lots.`);
+  if (missed || wasHidden) console.warn(`${missed} position(s) returned no purchase-history rows${wasHidden ? ' and the tab was BACKGROUNDED at some point during the run' : ''}; if the export looks short, keep this tab focused and re-run.`);
 
   if (!lots.length && !cashRows.length) { console.warn('Parsed 0 lots. Ensure positions are listed and re-run; if still empty, use fidelity_dom_inspector.js.'); return; }
 
