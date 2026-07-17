@@ -78,6 +78,15 @@ def is_cash(lot):
     return (lot.get("symbol") or "").strip().upper() == "CASH"
 
 
+def is_pending(lot):
+    """True for the value-only per-account pending-activity rows (Symbol=PENDING) the exporter emits.
+
+    Pending activity is unsettled trade cash; its ``current_value`` is signed (positive = credit /
+    cash in, negative = debit / cash out). Treated as cash-like: excluded from equity positions and
+    folded (signed) into net cash, while kept SEPARATE from the settled CASH balance."""
+    return (lot.get("symbol") or "").strip().upper() == "PENDING"
+
+
 def security_key(symbol):
     """Normalize a symbol into {kind: 'stock'|'option', key, underlying}.
 
@@ -126,7 +135,7 @@ def price_dispersion_flags(lots, tol=0.02):
     ``max > 0``)."""
     prices = {}
     for lot in lots:
-        if is_cash(lot) or security_key(lot.get("symbol"))["kind"] == "option":
+        if is_cash(lot) or is_pending(lot) or security_key(lot.get("symbol"))["kind"] == "option":
             continue
         sp = safe_per_share(lot)
         if sp is None:
@@ -277,17 +286,21 @@ def ripening(lots, as_of, st_rate=0.32, lt_rate=0.15, within=None):
 def concentration(lots, top=10, threshold=0.05):
     """Aggregate current market value by symbol across ALL accounts (single-name equity concentration).
 
-    Cash rows are excluded from the single-name statistics but reported separately. **Options are
-    excluded** from the equity ranking -- a lot's ``current_value`` is the option *premium*, not the
-    notional exposure, so ranking it as an equity position is misleading (use the ``options`` command);
-    the number of option lots dropped is reported as ``n_options_excluded``. Symbols whose **aggregated
-    value is non-positive** (a short position or a corrupt/negative scrape) are excluded from the ranking
-    and from invested so a single bad value cannot collapse the whole report; the count is reported as
-    ``n_nonpositive_excluded``. Weights are the fraction of INVESTED (non-cash, non-option, positive)
-    value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards the all-cash / zero-invested case
-    (empty rankings, HHI 0, effective positions None, cash 100%)."""
+    Cash rows are excluded from the single-name statistics but reported separately. **Pending activity**
+    (Symbol=PENDING) is likewise cash-like: excluded from the equity ranking and folded, with its sign
+    (positive = credit, negative = debit), into ``net_cash = cash_total + pending_total`` -- the summary
+    exposes ``cash_total`` (settled), ``pending_total`` (signed), and ``net_cash``, and percentages use
+    net cash. **Options are excluded** from the equity ranking -- a lot's ``current_value`` is the option
+    *premium*, not the notional exposure, so ranking it as an equity position is misleading (use the
+    ``options`` command); the number of option lots dropped is reported as ``n_options_excluded``. Symbols
+    whose **aggregated value is non-positive** (a short position or a corrupt/negative scrape) are excluded
+    from the ranking and from invested so a single bad value cannot collapse the whole report; the count is
+    reported as ``n_nonpositive_excluded``. Weights are the fraction of INVESTED (non-cash, non-option,
+    positive) value; HHI = sum(weight^2), effective #positions = 1/HHI. Guards the all-cash / zero-invested
+    case (empty rankings, HHI 0, effective positions None, cash 100%)."""
     by_symbol = {}
     cash_total = 0.0
+    pending_total = 0.0
     n_options_excluded = 0
     for lot in lots:
         try:
@@ -296,6 +309,9 @@ def concentration(lots, top=10, threshold=0.05):
             continue
         if is_cash(lot):
             cash_total += cv
+            continue
+        if is_pending(lot):        # unsettled trade cash (signed): folded into NET cash, kept separate
+            pending_total += cv
             continue
         sym = (lot.get("symbol") or "").strip()
         if security_key(sym)["kind"] == "option":
@@ -308,13 +324,16 @@ def concentration(lots, top=10, threshold=0.05):
     positive = {sym: s for sym, s in by_symbol.items() if s["value"] > 0}
     n_nonpositive_excluded = len(by_symbol) - len(positive)
     invested = sum(s["value"] for s in positive.values())
-    total = invested + cash_total
+    net_cash = cash_total + pending_total   # actual settled cash + signed pending activity
+    total = invested + net_cash
     if invested <= 0:  # all-cash / zero-invested guard: empty rankings, HHI 0, effective N/A
         return [], {
             "invested_total": invested,
             "cash_total": cash_total,
+            "pending_total": pending_total,
+            "net_cash": net_cash,
             "total": total,
-            "cash_pct": (cash_total / total) if total > 0 else (1.0 if cash_total > 0 else 0.0),
+            "cash_pct": (net_cash / total) if total > 0 else (1.0 if net_cash > 0 else 0.0),
             "num_positions": 0,
             "hhi": 0.0,
             "effective_positions": None,
@@ -343,8 +362,10 @@ def concentration(lots, top=10, threshold=0.05):
     summary = {
         "invested_total": invested,
         "cash_total": cash_total,
+        "pending_total": pending_total,
+        "net_cash": net_cash,
         "total": total,
-        "cash_pct": (cash_total / total) if total > 0 else 0.0,
+        "cash_pct": (net_cash / total) if total > 0 else 0.0,
         "num_positions": len(rows),
         "hhi": hhi,
         "effective_positions": (1.0 / hhi) if hhi > 0 else None,
@@ -1020,7 +1041,7 @@ def underlying_spots(lots):
     user can sanity-check it; it drives only option moneyness (ITM/OTM), never a dollar figure."""
     best = {}  # symbol -> (current_value, per_share)
     for lot in lots:
-        if is_cash(lot) or security_key(lot.get("symbol"))["kind"] == "option":
+        if is_cash(lot) or is_pending(lot) or security_key(lot.get("symbol"))["kind"] == "option":
             continue
         sp = safe_per_share(lot)
         if sp is None:

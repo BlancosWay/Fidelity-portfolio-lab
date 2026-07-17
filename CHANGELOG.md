@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Per-account "Pending activity" is now captured** as a signed value-only row (`Symbol=PENDING`)
+  in the browser export, kept separate from the `CASH` row: positive = credit (cash in), negative =
+  debit (cash out). The `concentration` analysis treats it as cash-like — excluded from the equity
+  ranking and folded (signed) into **net cash = settled cash + pending** — and prints settled,
+  pending, and net separately, so unsettled trades are reflected in each account's cash without
+  losing the breakdown.
 - **`dividends <history.csv> [--year Y]`** aggregates cash dividend income from a Fidelity Accounts
   History export — total plus per-symbol and per-account breakdowns, optionally filtered to a calendar
   year. Informational, not tax advice; qualified vs ordinary dividends are not distinguished (the export
@@ -28,6 +34,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README and SKILL now note this and advise verifying the per-account label in `dashboard`.
 
 ### Fixed
+- **Lot tables with more than ~10 lots are no longer truncated to the first page.** Fidelity
+  paginates each position's purchase-history table ~10 lots/page and the exporter scraped only the
+  rendered page, so a position with more lots lost the rest (e.g. a GOOG lot showing 75.156 of its
+  120.156 shares). The exporter now clicks the drawer's **"Show all"** button (or, if absent, pages
+  forward via the next-page button) and scrapes every page — each page exactly once, with no content
+  de-duplication so genuinely identical lots are preserved. Both pagination buttons are added to the
+  read-only `safeClick` allowlist (they only re-render the in-drawer table; no navigation).
+- **Exporter is now resilient to the tab being backgrounded.** Chrome throttles timers and pauses
+  rendering in a hidden tab, so switching to another window/tab mid-run left lot drawers un-rendered,
+  expired the exporter's waits, and silently dropped those positions (whole accounts could collapse
+  to just their cash row) while running very slowly. The waits now treat "hidden" as paused — they
+  don't count timeout or test a non-rendering DOM while the tab is hidden, and the scrape loop parks
+  until you return — plus a foreground reminder up front and an end-of-run `Scraped X/N positions`
+  summary that flags a backgrounded run so you know to re-run.
+- **Option lots (covered calls / cash-secured puts) were exported under the underlying stock's
+  ticker.** The browser exporter paired each lot's label with its purchase-history drawer by shared
+  list index, but the up-front position list excluded cash/money-market rows while the live
+  expander list did not — and every account is led by a Cash row. That one-row offset paired a
+  stock's symbol/description with an adjacent option's lot drawer, so an option's per-contract
+  premiums were written under e.g. `AAPL`/`APPLE INC` and then misclassified as stock by
+  `security_key`. `expanders()` now applies the same cash/core exclusion as the position count, and
+  each lot's account/symbol/description/type is read from the very button whose drawer is scraped
+  (never a separately-indexed snapshot), so the label and values always describe one position; a
+  position-count drift now warns instead of silently shifting.
+- **`Margin/Cash` column was polluted with market-status text.** The type was read from a
+  `.posweb-cell-a11y_indicator` span that Fidelity also uses for transient hints ("Not Priced
+  Today", "Has Activity Today"), so the column filled with those instead of the position type. It
+  now scans those spans and keeps only a real type (`Margin`/`Cash`/`Short`), leaving it blank
+  otherwise.
 - **Three small correctness/usability fixes.** (a) `options`/`expiration` now label an at-the-money
   contract (spot == strike) as `ATM` rather than `OTM`. (b) `parse_qty` reads a parenthesized quantity
   as negative (`"(100)"` → −100), matching the browser exporter's `num()`, instead of silently 0. (c) the

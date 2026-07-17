@@ -14,6 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "analyze"))
 import portfolio  # noqa: E402
+import tax_tools  # noqa: E402
 
 AS_OF = dt.date(2026, 7, 1)
 HEADERS = ",".join(portfolio.EXPECTED_HEADERS)
@@ -180,6 +181,43 @@ class ConcentrationCliTests(unittest.TestCase):
             os.unlink(db)
         self.assertIn("No non-cash equity positions", text)   # empty-rows branch
         self.assertIn("option lot(s) excluded", text)         # note still shown
+
+    def test_pending_activity_folds_into_net_cash(self):
+        # Settled CASH + a credit PENDING + a debit PENDING: net cash = 1000 + 300 - 500 = 800.
+        # PENDING is cash-like (never a ranked equity position); actual/pending/net are all shown.
+        db = build_db([
+            _row("Individual - TOD Test", "AAPL", 10, "Jan-05-2024",
+                 "$100.00", "$1,000.00", "$5,000.00", "+$4,000.00", "+400.00%"),
+            _row("Individual - TOD Test", "CASH", "", "", "", "", "$1,000.00", "", "",
+                 desc="Cash HELD IN MONEY MARKET", mc=""),
+            _row("Individual - TOD Test", "PENDING", "", "", "", "", "$300.00", "", "",
+                 desc="Pending activity", mc=""),
+            _row("Roth IRA Test", "PENDING", "", "", "", "", "-$500.00", "", "",
+                 desc="Pending activity", mc=""),
+        ])
+        try:
+            text = run(portfolio.cmd_concentration, db, 10, 0.05)
+        finally:
+            os.unlink(db)
+        self.assertIn("net cash $800.00", text)             # net cash (1000 + 300 - 500), labeled net
+        self.assertIn("settled $1,000.00", text)            # actual settled cash shown
+        self.assertIn("pending -$200.00", text)             # net pending shown, signed
+        # PENDING is not ranked as an equity position (only AAPL is a table row).
+        self.assertNotIn("PENDING", text)
+
+    def test_pending_summary_fields(self):
+        lots = [
+            {"symbol": "AAPL", "current_value": "5000", "account": "A", "quantity": "10"},
+            {"symbol": "CASH", "current_value": "1000", "account": "A"},
+            {"symbol": "PENDING", "current_value": "300", "account": "A"},
+            {"symbol": "PENDING", "current_value": "-500", "account": "B"},
+        ]
+        rows, s = tax_tools.concentration(lots, 0.05)
+        self.assertEqual(s["cash_total"], 1000.0)
+        self.assertEqual(s["pending_total"], -200.0)
+        self.assertEqual(s["net_cash"], 800.0)
+        self.assertAlmostEqual(s["cash_pct"], 800.0 / 5800.0)
+        self.assertEqual([r["symbol"] for r in rows], ["AAPL"])  # PENDING excluded from ranking
 
 
 SELL_ROWS = [
