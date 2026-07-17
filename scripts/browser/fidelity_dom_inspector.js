@@ -34,6 +34,21 @@
   const accounts = document.querySelectorAll('.posweb-row-account');
   P('account rows (.posweb-row-account): ' + accounts.length);
 
+  // ALL pinned-left rows in order -- reveals non-position rows we currently skip, especially the
+  // per-account "Pending activity" line (unsettled trades) that should roll into cash-per-account,
+  // plus account headers and cash/core rows. Dump each row's index, class list, sym-cell text, and
+  // the center-grid Current value so we can see how a "Pending activity" row is structured/valued.
+  const centerVal = ri => { const c = document.querySelector('.ag-center-cols-container [role="row"][row-index="' + ri + '"] [col-id="curVal"]'); return c ? clean(c.textContent) : ''; };
+  const allRows = [...document.querySelectorAll('.ag-pinned-left-cols-container [role="row"]')]
+    .map(r => ({ r, ri: parseInt(r.getAttribute('row-index'), 10) })).filter(x => !isNaN(x.ri)).sort((a, b) => a.ri - b.ri);
+  P('\nALL PINNED ROWS (' + allRows.length + '):  [idx] classes | symText | curVal');
+  allRows.forEach(({ r, ri }) => {
+    const symCell = r.querySelector('[col-id="sym"]');
+    P('  [' + ri + '] ' + tr(cls(r).replace(/\bag-row-\S+/g, '').replace(/\s+/g, ' ').trim(), 70)
+      + ' | ' + JSON.stringify(tr(clean(symCell ? symCell.textContent : ''), 44))
+      + ' | curVal=' + JSON.stringify(centerVal(ri)));
+  });
+
   // Position symbol cells -- how each position renders its symbol/description in the pinned-left grid.
   // Purpose: some OPTION positions (esp. covered calls / cash-secured puts) export with the underlying
   // ticker + company name (e.g. "AAPL" / "APPLE INC") instead of the option contract name + expiry
@@ -83,12 +98,28 @@
       const th = [...ph.querySelectorAll('thead th, thead td')].map(c => clean(c.innerText));
       P('  purchase-history THEAD (' + th.length + '): ' + th.join(' | '));
       const brs = [...ph.querySelectorAll('tbody tr')];
-      P('  purchase-history rows: ' + brs.length);
+      P('  purchase-history rows: ' + brs.length + '  (Fidelity paginates ~10 lots/page -- a position with more is truncated unless we page through)');
       brs.forEach((r, i) => {
         const cellsArr = [...r.children].map(c => clean(c.innerText));
         P('   row' + i + ' (' + cellsArr.length + ' cells): ' + cellsArr.map(c => tr(c, 18)).join(' | '));
       });
     }
+    // Pagination / "Show all" controls: dump EVERY interactive control in the drawer (tag, text,
+    // href for anchors, aria-*, class) so the exporter can target the right one to reveal all lots
+    // and add it to safeClick. We especially need to know if "Show all" / the page numbers are
+    // <button> (safe) or <a href> (could navigate -- must be handled differently).
+    const ctrls = [...drawer.querySelectorAll('*')].filter(e => e.tagName === 'BUTTON' || e.tagName === 'A' || e.getAttribute('role') === 'button');
+    P('  drawer controls (' + ctrls.length + '):');
+    ctrls.forEach(c => {
+      P('    <' + c.tagName.toLowerCase() + '>'
+        + ' text=' + JSON.stringify(tr(clean(c.innerText || c.textContent), 24))
+        + (c.getAttribute('aria-label') ? ' aria-label=' + JSON.stringify(c.getAttribute('aria-label')) : '')
+        + (c.tagName === 'A' ? ' href=' + JSON.stringify(c.getAttribute('href')) : '')
+        + (c.getAttribute('role') ? ' role=' + JSON.stringify(c.getAttribute('role')) : '')
+        + (c.getAttribute('aria-current') ? ' aria-current=' + JSON.stringify(c.getAttribute('aria-current')) : '')
+        + (c.getAttribute('aria-controls') ? ' aria-controls=' + JSON.stringify(c.getAttribute('aria-controls')) : '')
+        + ' class=' + JSON.stringify(tr(cls(c), 70)));
+    });
   } else {
     P('\nEXPANDED DRAWER: none open - expand ONE position (+) first, then re-run.');
   }

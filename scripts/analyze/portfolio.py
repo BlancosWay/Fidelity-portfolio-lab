@@ -391,7 +391,11 @@ def cmd_concentration(db_path, top, threshold):
                   "(short position or corrupt export value).")
 
     if not rows:
-        print(f"No non-cash equity positions. Cash: ${s['cash_total']:,.2f} (100%).")
+        _pend = s.get("pending_total")
+        _label = "Net cash" if _pend else "Cash"
+        _extra = (f" (settled ${s['cash_total']:,.2f}, pending {'+' if _pend >= 0 else '-'}${abs(_pend):,.2f})"
+                  if _pend else "")
+        print(f"No non-cash equity positions. {_label}: ${s['net_cash']:,.2f}{_extra} (100%).")
         _exclusion_notes()
         return
     _print_table(
@@ -400,7 +404,11 @@ def cmd_concentration(db_path, top, threshold):
           r["accounts"], (">%.0f%%" % (threshold * 100)) if r["over_threshold"] else "") for r in rows[:top]],
     )
     eff = f"{s['effective_positions']:.1f}" if s["effective_positions"] is not None else "N/A"
-    print(f"\nInvested (non-cash): ${s['invested_total']:,.2f}; cash ${s['cash_total']:,.2f} "
+    _pend = s.get("pending_total")
+    _cash_label = "net cash" if _pend else "cash"
+    _cash_extra = (f" (settled ${s['cash_total']:,.2f}, pending {'+' if _pend >= 0 else '-'}${abs(_pend):,.2f})"
+                   if _pend else "")
+    print(f"\nInvested (non-cash): ${s['invested_total']:,.2f}; {_cash_label} ${s['net_cash']:,.2f}{_cash_extra} "
           f"({s['cash_pct'] * 100:.1f}% of ${s['total']:,.2f} total).")
     print(f"  {s['num_positions']} positions; HHI={s['hhi']:.4f}; effective positions={eff}.")
     if s["over_threshold"]:

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- **Per-account "Pending activity" is now captured** as a signed value-only row (`Symbol=PENDING`)
+  in the browser export, kept separate from the `CASH` row: positive = credit (cash in), negative =
+  debit (cash out). The `concentration` analysis treats it as cash-like — excluded from the equity
+  ranking and folded (signed) into **net cash = settled cash + pending** — and prints settled,
+  pending, and net separately, so unsettled trades are reflected in each account's cash without
+  losing the breakdown.
 - **`dividends <history.csv> [--year Y]`** aggregates cash dividend income from a Fidelity Accounts
   History export — total plus per-symbol and per-account breakdowns, optionally filtered to a calendar
   year. Informational, not tax advice; qualified vs ordinary dividends are not distinguished (the export
@@ -28,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README and SKILL now note this and advise verifying the per-account label in `dashboard`.
 
 ### Fixed
+- **Lot tables with more than ~10 lots are no longer truncated to the first page.** Fidelity
+  paginates each position's purchase-history table ~10 lots/page and the exporter scraped only the
+  rendered page, so a position with more lots lost the rest (e.g. a GOOG lot showing 75.156 of its
+  120.156 shares). The exporter now clicks the drawer's **"Show all"** button (or, if absent, pages
+  forward via the next-page button) and scrapes every page — each page exactly once, with no content
+  de-duplication so genuinely identical lots are preserved. Both pagination buttons are added to the
+  read-only `safeClick` allowlist (they only re-render the in-drawer table; no navigation).
 - **Exporter is now resilient to the tab being backgrounded.** Chrome throttles timers and pauses
   rendering in a hidden tab, so switching to another window/tab mid-run left lot drawers un-rendered,
   expired the exporter's waits, and silently dropped those positions (whole accounts could collapse

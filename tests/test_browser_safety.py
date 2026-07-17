@@ -279,6 +279,22 @@ class BrowserSafety(unittest.TestCase):
         self.assertIn("posweb-drawer-tabpanel-lots", src)  # Purchase-history lots panel target
         self.assertIn("posweb-row-account", src)        # account-group collapse detection
         self.assertIn("posweb-row-position", src)       # position-row (expanded) detection
+        # The two lot-table pagination targets ("Show all" + "next page") must each be gated inside
+        # safeClick on tagName === 'BUTTON' AND their exact pagination class token -- never a bare
+        # substring elsewhere -- so the read-only, no-navigation click contract stays enforced as the
+        # allowlist grows. (These <button>s only re-render the in-drawer lot table.)
+        body = safeclick_body(src)
+        self.assertIsNotNone(body, "safeClick body not found in export")
+        for label, token in (("okShowAll", "posweb-lots-table-pagination-show-all-button"),
+                             ("okNextPage", "posweb-lots-table-pagination-nav-next-button")):
+            self.assertRegex(
+                body,
+                r"const\s+" + label + r"\s*=\s*el\.tagName\s*===?\s*['\"]BUTTON['\"]\s*&&\s*"
+                + r"(?:!!\s*el\.classList\s*&&\s*)?el\.classList\.contains\(\s*['\"]"
+                + re.escape(token) + r"['\"]\s*\)",
+                f"{label} must require tagName==='BUTTON' AND el.classList.contains('{token}') (exact class, not a substring)")
+            self.assertRegex(body, r"\|\|\s*" + label + r"\b",
+                             f"{label} must be part of the safeClick allow gate")
 
     def test_inspector_is_safe(self):
         self._scan(INSPECTOR, {"el"})
